@@ -19,8 +19,10 @@ use Joomla\CMS\Log\Log;
 use Joomla\CMS\Plugin\CMSPlugin;
 use Joomla\CMS\Session\Session;
 use Joomla\CMS\Uri\Uri;
+use Joomla\Database\DatabaseAwareTrait;
 use Joomla\Event\SubscriberInterface;
 use Joomla\Module\Healthcheck\Administrator\Event\HealthChecksEvent;
+use Joomla\Plugin\Healthcheck\Securityheaders\Headers\FixLink;
 use Joomla\Plugin\Healthcheck\Securityheaders\Headers\HeaderFetcher;
 use Joomla\Plugin\Healthcheck\Securityheaders\Headers\HeaderScore;
 
@@ -36,6 +38,7 @@ use Joomla\Plugin\Healthcheck\Securityheaders\Headers\HeaderScore;
 final class Securityheaders extends CMSPlugin implements SubscriberInterface
 {
     use CacheControllerFactoryAwareTrait;
+    use DatabaseAwareTrait;
 
     /**
      * Cache group of the fetched responses
@@ -67,6 +70,22 @@ final class Securityheaders extends CMSPlugin implements SubscriberInterface
      * @since  __DEPLOY_VERSION__
      */
     private ?array $response = null;
+
+    /**
+     * Extension id of the System - HTTP Headers plugin, looked up once
+     *
+     * @var    integer|null
+     * @since  __DEPLOY_VERSION__
+     */
+    private ?int $httpHeadersId = null;
+
+    /**
+     * Whether the extension id was looked up
+     *
+     * @var    boolean
+     * @since  __DEPLOY_VERSION__
+     */
+    private bool $httpHeadersIdLoaded = false;
 
     /**
      * Constructor
@@ -152,12 +171,16 @@ final class Securityheaders extends CMSPlugin implements SubscriberInterface
         $rows     = [];
 
         foreach ($score['items'] as $item) {
+            $link = FixLink::for($item, $this->httpHeadersId());
+
             $rows[] = [
-                'header' => self::NAMES[$item['key']],
-                'value'  => self::shorten($item['value']),
-                'points' => $item['max'] === 0 ? (string) $item['points'] : $item['points'] . ' / ' . $item['max'],
-                'fix'    => $item['fix'] === null ? '' : Text::_($item['fix']),
-                'status' => $item['status'],
+                'header'    => self::NAMES[$item['key']],
+                'value'     => self::shorten($item['value']),
+                'points'    => $item['max'] === 0 ? (string) $item['points'] : $item['points'] . ' / ' . $item['max'],
+                'fix'       => $item['fix'] === null ? '' : Text::_($item['fix']),
+                'status'    => $item['status'],
+                'link'      => $link === null ? '' : $link['url'],
+                'linkLabel' => $link === null ? '' : Text::_($link['label']),
             ];
         }
 
@@ -180,7 +203,21 @@ final class Securityheaders extends CMSPlugin implements SubscriberInterface
                         default   => 'danger',
                     },
                 ],
-                ['key' => 'fix', 'title' => Text::_('PLG_HEALTHCHECK_SECURITYHEADERS_COLUMN_FIX')],
+                [
+                    'key'      => 'fix',
+                    'title'    => Text::_('PLG_HEALTHCHECK_SECURITYHEADERS_COLUMN_FIX'),
+                    'type'     => 'custom',
+                    'renderer' => static function ($value, $item): string {
+                        $html = htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8');
+
+                        if (($item['link'] ?? '') !== '') {
+                            $html .= '<br><a href="' . htmlspecialchars($item['link'], ENT_QUOTES, 'UTF-8') . '">'
+                                . htmlspecialchars($item['linkLabel'], ENT_QUOTES, 'UTF-8') . '</a>';
+                        }
+
+                        return $html;
+                    },
+                ],
             ],
             'data' => $rows,
         ]]);
@@ -321,6 +358,46 @@ final class Securityheaders extends CMSPlugin implements SubscriberInterface
         $response = $this->response();
 
         return HeaderScore::evaluate($response['headers'], str_starts_with(strtolower($response['url']), 'https://'));
+    }
+
+    /**
+     * Extension id of the System - HTTP Headers plugin, enabled or not.
+     *
+     * @return  integer|null  Null when it cannot be found
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    private function httpHeadersId(): ?int
+    {
+        if ($this->httpHeadersIdLoaded) {
+            return $this->httpHeadersId;
+        }
+
+        $this->httpHeadersIdLoaded = true;
+
+        try {
+            $db      = $this->getDatabase();
+            $type    = 'plugin';
+            $folder  = 'system';
+            $element = 'httpheaders';
+            $query   = $db->createQuery()
+                ->select($db->quoteName('extension_id'))
+                ->from($db->quoteName('#__extensions'))
+                ->where($db->quoteName('type') . ' = :type')
+                ->where($db->quoteName('folder') . ' = :folder')
+                ->where($db->quoteName('element') . ' = :element')
+                ->bind(':type', $type)
+                ->bind(':folder', $folder)
+                ->bind(':element', $element);
+
+            $id = (int) $db->setQuery($query)->loadResult();
+
+            $this->httpHeadersId = $id > 0 ? $id : null;
+        } catch (\Throwable $e) {
+            Log::add('Security Headers Health Check: could not find the HTTP Headers plugin: ' . $e->getMessage(), Log::WARNING, 'healthcheck');
+        }
+
+        return $this->httpHeadersId;
     }
 
     /**
