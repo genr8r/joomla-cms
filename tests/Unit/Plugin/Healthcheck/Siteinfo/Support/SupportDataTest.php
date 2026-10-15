@@ -276,4 +276,30 @@ class SupportDataTest extends UnitTestCase
 
         SupportData::parseManual('<html><body><h3>Requirements for Joomla! 6.x</h3><p>Moved.</p></body></html>', 6);
     }
+
+    /**
+     * @return  void
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    #[TestDox('rejects an empty manual page')]
+    public function testParseManualEmpty(): void
+    {
+        $this->expectException(\UnexpectedValueException::class);
+
+        SupportData::parseManual('', 6);
+    }
+
+    /**
+     * @return  void
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    #[TestDox('rejects a requirements table without a PHP row')]
+    public function testParseManualMissingPhpRow(): void
+    {
+        $this->expectException(\UnexpectedValueException::class);
+
+        SupportData::parseManual('<html><body><h3>Requirements for Joomla! 6.x</h3><table><thead><tr><th>Software</th><th>Recommended</th><th>Supported</th><th>Minimum</th></tr></thead><tbody><tr><td>MySQL</td><td>8.4</td><td>8.0.13</td><td>8.0.13</td></tr></tbody></table></body></html>', 6);
+    }
 }

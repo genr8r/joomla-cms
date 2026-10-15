@@ -330,6 +330,10 @@ final class SupportData
      */
     public static function parseManual(string $html, int $major): array
     {
+        if (trim($html) === '') {
+            throw new \UnexpectedValueException('Empty manual page');
+        }
+
         $document = new \DOMDocument();
         $previous = libxml_use_internal_errors(true);
         $document->loadHTML($html);
