@@ -238,7 +238,7 @@ final class Ssl extends CMSPlugin implements SubscriberInterface
     }
 
     /**
-     * Tooltip: issuer, why the certificate is not trusted or could not be read, and when it was checked.
+     * Tooltip: the name the certificate was issued for, the issuer, why the certificate is not trusted or could not be read, and when it was checked.
      *
      * @param   ?array  $probe  Probe result, or null when the site is not served over HTTPS
      *
@@ -253,6 +253,10 @@ final class Ssl extends CMSPlugin implements SubscriberInterface
         }
 
         $parts = [];
+
+        if ($probe['subject'] !== '') {
+            $parts[] = Text::sprintf('PLG_HEALTHCHECK_SSL_TITLE_SUBJECT', $probe['subject']);
+        }
 
         if ($probe['issuer'] !== '') {
             $parts[] = Text::sprintf('PLG_HEALTHCHECK_SSL_TITLE_ISSUER', $probe['issuer']);

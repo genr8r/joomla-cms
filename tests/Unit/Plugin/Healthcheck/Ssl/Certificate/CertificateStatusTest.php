@@ -47,6 +47,7 @@ class CertificateStatusTest extends UnitTestCase
             'validFrom' => $validFrom ?? self::NOW - 60 * self::DAY,
             'validTo'   => $validTo,
             'issuer'    => 'Test CA',
+            'subject'   => 'example.test',
             'checkedAt' => self::NOW,
         ];
     }
@@ -176,7 +177,7 @@ class CertificateStatusTest extends UnitTestCase
     #[TestDox('stays neutral when the certificate could not be read')]
     public function testUnchecked(): void
     {
-        $probe = ['ok' => false, 'trusted' => false, 'reason' => 'Connection refused', 'validFrom' => null, 'validTo' => null, 'issuer' => '', 'checkedAt' => self::NOW];
+        $probe = ['ok' => false, 'trusted' => false, 'reason' => 'Connection refused', 'validFrom' => null, 'validTo' => null, 'issuer' => '', 'subject' => '', 'checkedAt' => self::NOW];
 
         $this->assertSame(
             ['status' => 'none', 'key' => 'PLG_HEALTHCHECK_SSL_STATUS_UNCHECKED', 'days' => null, 'date' => null, 'plural' => false],
@@ -284,21 +285,22 @@ class CertificateStatusTest extends UnitTestCase
     public static function usableProvider(): array
     {
         $now     = self::NOW;
-        $success = ['ok' => true, 'trusted' => true, 'reason' => '', 'validFrom' => $now - 86400, 'validTo' => $now + 86400 * 60, 'issuer' => 'CA', 'checkedAt' => $now - 3600];
-        $failure = ['ok' => false, 'trusted' => false, 'reason' => 'refused', 'validFrom' => null, 'validTo' => null, 'issuer' => '', 'checkedAt' => $now - 600];
+        $success = ['ok' => true, 'trusted' => true, 'reason' => '', 'validFrom' => $now - 86400, 'validTo' => $now + 86400 * 60, 'issuer' => 'CA', 'subject' => 'example.org', 'checkedAt' => $now - 3600];
+        $failure = ['ok' => false, 'trusted' => false, 'reason' => 'refused', 'validFrom' => null, 'validTo' => null, 'issuer' => '', 'subject' => '', 'checkedAt' => $now - 600];
 
         return [
-            'fresh success'         => [$success, true],
-            'success at 23 hours'   => [['checkedAt' => $now - 82800] + $success, true],
-            'success at 24 hours'   => [['checkedAt' => $now - 86400] + $success, false],
-            'fresh failure'         => [$failure, true],
-            'failure at one hour'   => [['checkedAt' => $now - 3600] + $failure, false],
-            'checked in the future' => [['checkedAt' => $now + 60] + $success, false],
-            'cache miss'            => [false, false],
-            'not an array'          => ['x', false],
-            'missing key'           => [array_diff_key($success, ['issuer' => true]), false],
-            'string timestamp'      => [['validTo' => '1800000000'] + $success, false],
-            'ok without dates'      => [['validTo' => null] + $success, false],
+            'fresh success'                     => [$success, true],
+            'success at 23 hours'               => [['checkedAt' => $now - 82800] + $success, true],
+            'success at 24 hours'               => [['checkedAt' => $now - 86400] + $success, false],
+            'fresh failure'                     => [$failure, true],
+            'failure at one hour'               => [['checkedAt' => $now - 3600] + $failure, false],
+            'checked in the future'             => [['checkedAt' => $now + 60] + $success, false],
+            'cache miss'                        => [false, false],
+            'not an array'                      => ['x', false],
+            'missing key'                       => [array_diff_key($success, ['issuer' => true]), false],
+            'missing subject (old cache shape)' => [array_diff_key($success, ['subject' => true]), false],
+            'string timestamp'                  => [['validTo' => '1800000000'] + $success, false],
+            'ok without dates'                  => [['validTo' => null] + $success, false],
         ];
     }
 

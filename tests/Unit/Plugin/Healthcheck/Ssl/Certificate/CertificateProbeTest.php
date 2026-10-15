@@ -58,6 +58,38 @@ class CertificateProbeTest extends UnitTestCase
     }
 
     /**
+     * @return  array
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    public static function subjectProvider(): array
+    {
+        return [
+            'common name'           => [['subject' => ['CN' => 'example.org']], 'example.org'],
+            'common name as array'  => [['subject' => ['CN' => ['', 'first.example', 'second.example']]], 'first.example'],
+            'empty name uses SAN'   => [['subject' => ['CN' => ''], 'extensions' => ['subjectAltName' => 'DNS:a.example, DNS:b.example']], 'a.example'],
+            'SAN skips non-DNS'     => [['subject' => [], 'extensions' => ['subjectAltName' => 'IP Address:10.0.0.1, DNS:c.example']], 'c.example'],
+            'no name at all'        => [['subject' => ['O' => 'Org']], ''],
+            'SAN without DNS entry' => [['extensions' => ['subjectAltName' => 'IP Address:10.0.0.1, email:a@example.org']], ''],
+        ];
+    }
+
+    /**
+     * @param   array   $info      An openssl_x509_parse() array
+     * @param   string  $expected  The name
+     *
+     * @return  void
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    #[DataProvider('subjectProvider')]
+    #[TestDox('finds the name a certificate was issued for')]
+    public function testSubjectName(array $info, string $expected): void
+    {
+        $this->assertSame($expected, CertificateProbe::subjectName($info));
+    }
+
+    /**
      * @return  void
      *
      * @since   __DEPLOY_VERSION__
@@ -72,6 +104,7 @@ class CertificateProbeTest extends UnitTestCase
         $parsed = CertificateProbe::parse($cert);
 
         $this->assertSame('Test Issuer', $parsed['issuer']);
+        $this->assertSame('example.test', $parsed['subject']);
         $this->assertSame(30 * 86400, $parsed['validTo'] - $parsed['validFrom']);
         $this->assertEqualsWithDelta(time(), $parsed['validFrom'], 120);
 
@@ -147,6 +180,7 @@ class CertificateProbeTest extends UnitTestCase
         $this->assertFalse($result['ok']);
         $this->assertFalse($result['trusted']);
         $this->assertNotSame('', $result['reason']);
+        $this->assertSame('', $result['subject']);
         $this->assertNull($result['validTo']);
         $this->assertEqualsWithDelta(time(), $result['checkedAt'], 5);
     }

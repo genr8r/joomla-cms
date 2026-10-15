@@ -88,11 +88,11 @@ final class CertificateProbe
     }
 
     /**
-     * Read validity dates and issuer from a certificate.
+     * Read validity dates, issuer and subject name from a certificate.
      *
      * @param   \OpenSSLCertificate|string  $certificate  Certificate object or PEM string
      *
-     * @return  array|null  ['validFrom' => int, 'validTo' => int, 'issuer' => string], or null if unreadable
+     * @return  array|null  ['validFrom' => int, 'validTo' => int, 'issuer' => string, 'subject' => string], or null if unreadable
      *
      * @since   __DEPLOY_VERSION__
      */
@@ -116,7 +116,42 @@ final class CertificateProbe
             'validFrom' => (int) $info['validFrom_time_t'],
             'validTo'   => (int) $info['validTo_time_t'],
             'issuer'    => \is_array($issuer) ? implode(', ', $issuer) : (string) $issuer,
+            'subject'   => self::subjectName($info),
         ];
+    }
+
+    /**
+     * The name a certificate was issued for: the common name, else the first DNS name in the subject alternative names.
+     *
+     * @param   array  $info  An openssl_x509_parse() array
+     *
+     * @return  string  The name, or an empty string when there is none
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    public static function subjectName(array $info): string
+    {
+        $common = $info['subject']['CN'] ?? '';
+
+        foreach ((array) $common as $name) {
+            if (\is_string($name) && $name !== '') {
+                return $name;
+            }
+        }
+
+        $alternatives = $info['extensions']['subjectAltName'] ?? '';
+
+        if (\is_string($alternatives)) {
+            foreach (explode(',', $alternatives) as $entry) {
+                $entry = trim($entry);
+
+                if (str_starts_with($entry, 'DNS:') && trim(substr($entry, 4)) !== '') {
+                    return trim(substr($entry, 4));
+                }
+            }
+        }
+
+        return '';
     }
 
     /**
@@ -163,7 +198,7 @@ final class CertificateProbe
      */
     public static function failure(string $reason, int $checkedAt): array
     {
-        return ['ok' => false, 'trusted' => false, 'reason' => $reason, 'validFrom' => null, 'validTo' => null, 'issuer' => '', 'checkedAt' => $checkedAt];
+        return ['ok' => false, 'trusted' => false, 'reason' => $reason, 'validFrom' => null, 'validTo' => null, 'issuer' => '', 'subject' => '', 'checkedAt' => $checkedAt];
     }
 
     /**
@@ -175,7 +210,7 @@ final class CertificateProbe
      * @param   integer  $port     TCP port
      * @param   integer  $timeout  Seconds for the connect and for the handshake
      *
-     * @return  array  ['ok', 'trusted', 'reason', 'validFrom', 'validTo', 'issuer', 'checkedAt']
+     * @return  array  ['ok', 'trusted', 'reason', 'validFrom', 'validTo', 'issuer', 'subject', 'checkedAt']
      *
      * @since   __DEPLOY_VERSION__
      */

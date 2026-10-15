@@ -95,13 +95,14 @@ final class CertificateStatus
     {
         if (
             !\is_array($cached)
-            || !isset($cached['ok'], $cached['trusted'], $cached['reason'], $cached['issuer'], $cached['checkedAt'])
+            || !isset($cached['ok'], $cached['trusted'], $cached['reason'], $cached['issuer'], $cached['subject'], $cached['checkedAt'])
             || !\array_key_exists('validFrom', $cached)
             || !\array_key_exists('validTo', $cached)
             || !\is_bool($cached['ok'])
             || !\is_bool($cached['trusted'])
             || !\is_string($cached['reason'])
             || !\is_string($cached['issuer'])
+            || !\is_string($cached['subject'])
             || !\is_int($cached['checkedAt'])
         ) {
             return false;
