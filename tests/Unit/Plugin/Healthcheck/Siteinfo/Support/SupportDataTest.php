@@ -108,6 +108,8 @@ class SupportDataTest extends UnitTestCase
             'eol within 6 months' => ['php', '8.2.5', 'warning', 'PLG_HEALTHCHECK_SITEINFO_STATUS_EOL_SOON', ['2026-12-31']],
             'security fixes only' => ['php', '8.3.10', 'warning', 'PLG_HEALTHCHECK_SITEINFO_STATUS_SECURITY_ONLY', ['2027-12-31']],
             'supported'           => ['mariadb', '11.8.3', 'healthy', 'PLG_HEALTHCHECK_SITEINFO_STATUS_SUPPORTED', ['2028-06-04']],
+            'mariadb 11.2 eol'    => ['mariadb', '11.2.4', 'critical', 'PLG_HEALTHCHECK_SITEINFO_STATUS_EOL_PAST', ['2024-11-21']],
+            'mariadb 10.9 eol'    => ['mariadb', '10.9.8', 'critical', 'PLG_HEALTHCHECK_SITEINFO_STATUS_EOL_PAST', ['2023-08-22']],
             'mariadb dev site'    => ['mariadb', '12.2.2-MariaDB', 'critical', 'PLG_HEALTHCHECK_SITEINFO_STATUS_EOL_PAST', ['2026-05-28']],
             'older than known'    => ['php', '5.6.40', 'critical', 'PLG_HEALTHCHECK_SITEINFO_STATUS_EOL_OLD', []],
             'newer than known'    => ['php', '9.0.0', 'healthy', 'PLG_HEALTHCHECK_SITEINFO_STATUS_NEWER', []],
@@ -301,5 +303,74 @@ class SupportDataTest extends UnitTestCase
         $this->expectException(\UnexpectedValueException::class);
 
         SupportData::parseManual('<html><body><h3>Requirements for Joomla! 6.x</h3><table><thead><tr><th>Software</th><th>Recommended</th><th>Supported</th><th>Minimum</th></tr></thead><tbody><tr><td>MySQL</td><td>8.4</td><td>8.0.13</td><td>8.0.13</td></tr></tbody></table></body></html>', 6);
+    }
+
+    /**
+     * @return  void
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    #[TestDox('knows every MariaDB cycle from 10.4 to 13.0')]
+    public function testEveryMariadbCycleResolves(): void
+    {
+        $cycles = ['10.4', '10.5', '10.6', '10.7', '10.8', '10.9', '10.10', '10.11', '11.0', '11.1', '11.2', '11.3', '11.4', '11.5', '11.6', '11.7', '11.8', '12.0', '12.1', '12.2', '12.3', '13.0'];
+
+        foreach ($cycles as $cycle) {
+            $this->assertSame($cycle, SupportData::cycleFor('mariadb', $cycle . '.1'), 'MariaDB ' . $cycle);
+            $this->assertNotSame('none', (new SupportData())->getEolStatus('mariadb', $cycle . '.1', $this->today())['status'], 'MariaDB ' . $cycle);
+        }
+    }
+
+    /**
+     * @return  void
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    #[TestDox('keeps the built-in requirements in step with the manual fixture')]
+    public function testBuiltInRequirementsMatchFixture(): void
+    {
+        $builtIn = (new \ReflectionClassConstant(SupportData::class, 'REQUIREMENTS'))->getValue();
+        $parsed  = SupportData::parseManual(file_get_contents(__DIR__ . '/fixtures/technical-requirements.html'), 6);
+
+        $this->assertSame($parsed['requirements'], $builtIn);
+    }
+
+    /**
+     * @return  void
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    #[TestDox('does not read the next section table when the heading has none')]
+    public function testParseManualDoesNotSkipToNextSection(): void
+    {
+        $this->expectException(\UnexpectedValueException::class);
+
+        SupportData::parseManual('<html><body><h3>Requirements for Joomla! 6.x</h3><p>TBD</p><h3>Requirements for Joomla! 5.x</h3><table><tbody><tr><td>PHP</td><td>8.2</td><td>8.1.0</td><td>8.1.0</td></tr></tbody></table></body></html>', 6);
+    }
+
+    /**
+     * @return  void
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    #[TestDox('rejects non-numeric version cells')]
+    public function testParseManualRejectsNonNumericCells(): void
+    {
+        $this->expectException(\UnexpectedValueException::class);
+
+        SupportData::parseManual('<html><body><h3>Requirements for Joomla! 6.x</h3><table><tbody><tr><td>PHP</td><td>8.4</td><td>8.3.0</td><td>8.3.0</td></tr><tr><td>MySQL</td><td>TBD</td><td>8.0.13</td><td>8.0.13</td></tr></tbody></table></body></html>', 6);
+    }
+
+    /**
+     * @return  void
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    #[TestDox('rejects a non-numeric minimum')]
+    public function testParseManualRejectsNonNumericMinimum(): void
+    {
+        $this->expectException(\UnexpectedValueException::class);
+
+        SupportData::parseManual('<html><body><h3>Requirements for Joomla! 6.x</h3><table><tbody><tr><td>PHP</td><td>8.4</td><td>8.3.0</td><td>N/A</td></tr></tbody></table></body></html>', 6);
     }
 }

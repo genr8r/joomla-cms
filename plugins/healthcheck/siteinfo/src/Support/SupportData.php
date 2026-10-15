@@ -43,7 +43,8 @@ final class SupportData
 
     /**
      * Built-in release cycles: active = end of full support (null if not published), eol = end of security fixes.
-     * Source: https://endoflife.date (retrieved 2026-10-15)
+     * Source: https://endoflife.date (retrieved 2026-10-15). Include every cycle at or above Joomla's minimum
+     * supported version (PHP 8.3, MySQL 8.0, MariaDB 10.4, PostgreSQL 12), including cycles already end of life.
      *
      * @since  __DEPLOY_VERSION__
      */
@@ -77,8 +78,19 @@ final class SupportData
             '10.4'  => ['active' => null, 'eol' => '2024-06-18'],
             '10.5'  => ['active' => null, 'eol' => '2025-06-24'],
             '10.6'  => ['active' => null, 'eol' => '2026-07-06'],
+            '10.7'  => ['active' => null, 'eol' => '2023-02-09'],
+            '10.8'  => ['active' => null, 'eol' => '2023-05-20'],
+            '10.9'  => ['active' => null, 'eol' => '2023-08-22'],
+            '10.10' => ['active' => null, 'eol' => '2023-11-17'],
             '10.11' => ['active' => null, 'eol' => '2028-02-16'],
+            '11.0'  => ['active' => null, 'eol' => '2024-06-06'],
+            '11.1'  => ['active' => null, 'eol' => '2024-08-21'],
+            '11.2'  => ['active' => null, 'eol' => '2024-11-21'],
+            '11.3'  => ['active' => null, 'eol' => '2024-05-29'],
             '11.4'  => ['active' => null, 'eol' => '2029-05-29'],
+            '11.5'  => ['active' => null, 'eol' => '2024-11-21'],
+            '11.6'  => ['active' => null, 'eol' => '2025-02-13'],
+            '11.7'  => ['active' => null, 'eol' => '2025-05-12'],
             '11.8'  => ['active' => null, 'eol' => '2028-06-04'],
             '12.0'  => ['active' => null, 'eol' => '2025-11-18'],
             '12.1'  => ['active' => null, 'eol' => '2026-02-13'],
@@ -105,7 +117,7 @@ final class SupportData
 
     /**
      * Joomla 6.x requirements: [recommended, supported, minimum]. Minimum null = not enforced.
-     * Source: https://manual.joomla.org/docs/next/get-started/technical-requirements/ (retrieved 2026-10-15)
+     * Source: https://manual.joomla.org/docs/get-started/technical-requirements/ (the page SupportData::MANUAL_URL refreshes from, retrieved 2026-10-15)
      *
      * @since  __DEPLOY_VERSION__
      */
@@ -342,7 +354,7 @@ final class SupportData
 
         $xpath   = new \DOMXPath($document);
         $heading = 'Requirements for Joomla! ' . $major . '.x';
-        $table   = $xpath->query('(//h2|//h3)[contains(normalize-space(.), "' . $heading . '")]/following-sibling::table[1]')->item(0);
+        $table   = $xpath->query('(//h2|//h3)[contains(normalize-space(.), "' . $heading . '")]/following-sibling::*[self::table or self::h2 or self::h3][1][self::table]')->item(0);
 
         if ($table === null) {
             throw new \UnexpectedValueException('No "' . $heading . '" table on the manual page');
@@ -358,7 +370,15 @@ final class SupportData
                 continue;
             }
 
-            $requirements[$product] = [$cells[1], $cells[2], $cells[3] === '' ? null : $cells[3]];
+            $minimum = $cells[3] === '' ? null : $cells[3];
+
+            foreach ([$cells[1], $cells[2], $minimum] as $value) {
+                if ($value !== null && !preg_match('/^\d+(\.\d+)*$/', $value)) {
+                    throw new \UnexpectedValueException('Unexpected version "' . $value . '" for ' . $cells[0] . ' in the "' . $heading . '" table');
+                }
+            }
+
+            $requirements[$product] = [$cells[1], $cells[2], $minimum];
         }
 
         if (!isset($requirements['php'])) {
