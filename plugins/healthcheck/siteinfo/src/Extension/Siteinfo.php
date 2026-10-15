@@ -40,12 +40,42 @@ final class Siteinfo extends CMSPlugin implements SubscriberInterface
     use DatabaseAwareTrait;
 
     /**
-     * Cache group and id of the requirements refreshed from the manual
+     * Cache group of the requirements refreshed from the manual
      *
      * @since  __DEPLOY_VERSION__
      */
     private const CACHE_GROUP = 'plg_healthcheck_siteinfo';
-    private const STORE_ID    = 'requirements';
+
+    /**
+     * Cache id of the requirements refreshed from the manual
+     *
+     * @since  __DEPLOY_VERSION__
+     */
+    private const STORE_ID = 'requirements';
+
+    /**
+     * The stored copy of the requirements, read once per request
+     *
+     * @var    array|null
+     * @since  __DEPLOY_VERSION__
+     */
+    private ?array $storedCopy = null;
+
+    /**
+     * Whether the stored copy has been read in this request
+     *
+     * @var    boolean
+     * @since  __DEPLOY_VERSION__
+     */
+    private bool $storedRead = false;
+
+    /**
+     * The software version rows, built once per request
+     *
+     * @var    array|null
+     * @since  __DEPLOY_VERSION__
+     */
+    private ?array $versionRows = null;
 
     /**
      * Constructor
@@ -91,7 +121,7 @@ final class Siteinfo extends CMSPlugin implements SubscriberInterface
             return;
         }
 
-        $rows      = $this->collectVersionRows($this->readStored());
+        $rows      = $this->collectVersionRows();
         $attention = array_filter($rows, static fn (array $row): bool => \in_array($row['status'], [SupportData::STATUS_CRITICAL, SupportData::STATUS_WARNING], true));
         $return    = base64_encode(Uri::getInstance()->toString());
 
@@ -132,7 +162,7 @@ final class Siteinfo extends CMSPlugin implements SubscriberInterface
         }
 
         $stored = $this->readStored();
-        $rows   = $this->collectVersionRows($stored);
+        $rows   = $this->collectVersionRows();
 
         $versions = [
             'id'      => 'plg_healthcheck_siteinfo_versions',
@@ -192,7 +222,7 @@ final class Siteinfo extends CMSPlugin implements SubscriberInterface
     {
         $app = $this->getApplication();
 
-        if (!Session::checkToken('get') || !$app->getIdentity()->authorise('core.admin')) {
+        if (!$app->isClient('administrator') || !Session::checkToken('get') || !$app->getIdentity()->authorise('core.admin')) {
             throw new \RuntimeException(Text::_('JERROR_ALERTNOAUTHOR'), 403);
         }
 
@@ -213,6 +243,7 @@ final class Siteinfo extends CMSPlugin implements SubscriberInterface
                 $parsed = SupportData::parseManual((string) $response->getBody(), (int) JVERSION);
 
                 $this->store()->store(['fetched' => time(), 'retrieved' => gmdate('Y-m-d')] + $parsed, self::STORE_ID);
+                $this->storedRead = false;
                 $app->enqueueMessage(Text::_('PLG_HEALTHCHECK_SITEINFO_REFRESH_DONE'), 'success');
             } catch (\Throwable $e) {
                 Log::add('Site Information: could not refresh requirements from the manual: ' . $e->getMessage(), Log::WARNING, 'healthcheck');
@@ -250,16 +281,19 @@ final class Siteinfo extends CMSPlugin implements SubscriberInterface
     }
 
     /**
-     * Detect versions and build translated table rows.
-     *
-     * @param   array|null  $stored  Requirements refreshed from the manual, if any
+     * Detect versions and build translated table rows, once per request.
      *
      * @return  array  List of ['label', 'version', 'status', 'text', 'ends']
      *
      * @since   __DEPLOY_VERSION__
      */
-    private function collectVersionRows(?array $stored): array
+    private function collectVersionRows(): array
     {
+        if ($this->versionRows !== null) {
+            return $this->versionRows;
+        }
+
+        $stored = $this->readStored();
         $report = new SystemReport(new SupportData($stored['requirements'] ?? []), new \DateTimeImmutable('today', new \DateTimeZone('UTC')));
         $rows   = [];
 
@@ -293,7 +327,7 @@ final class Siteinfo extends CMSPlugin implements SubscriberInterface
             'ends'    => '',
         ];
 
-        return $rows;
+        return $this->versionRows = $rows;
     }
 
     /**
@@ -336,18 +370,21 @@ final class Siteinfo extends CMSPlugin implements SubscriberInterface
             $ini[$setting] = (string) \ini_get($setting);
         }
 
-        $opcache = \function_exists('opcache_get_status') && \is_array(@opcache_get_status(false)) && (bool) \ini_get('opcache.enable');
+        $opcache = \extension_loaded('Zend OPcache') && filter_var(\ini_get('opcache.enable'), FILTER_VALIDATE_BOOLEAN);
         $rows    = SystemReport::settingsRows($ini, $opcache, $memoryLimit ?? SystemReport::MEMORY_LIMIT);
 
-        foreach ($rows as &$row) {
-            if (str_starts_with($row['current'], 'J')) {
-                $row['current'] = Text::_($row['current']);
-            }
+        return array_map(
+            static function (array $row): array {
+                if (\in_array($row['current'], ['JENABLED', 'JDISABLED', 'JON', 'JOFF'], true)) {
+                    $row['current'] = Text::_($row['current']);
+                }
 
-            $row['recommended'] = Text::sprintf($row['recommended'][0], ...$row['recommended'][1]);
-        }
+                $row['recommended'] = Text::sprintf($row['recommended'][0], ...$row['recommended'][1]);
 
-        return $rows;
+                return $row;
+            },
+            $rows
+        );
     }
 
     /**
@@ -398,7 +435,7 @@ final class Siteinfo extends CMSPlugin implements SubscriberInterface
     {
         return $this->getCacheControllerFactory()->createCacheController(
             'output',
-            ['defaultgroup' => self::CACHE_GROUP, 'caching' => true, 'lifetime' => 43200]
+            ['defaultgroup' => self::CACHE_GROUP, 'caching' => true, 'lifetime' => 43200, 'language' => 'en-GB']
         );
     }
 
@@ -411,8 +448,30 @@ final class Siteinfo extends CMSPlugin implements SubscriberInterface
      */
     private function readStored(): ?array
     {
-        $stored = $this->store()->get(self::STORE_ID);
+        if ($this->storedRead) {
+            return $this->storedCopy;
+        }
 
-        return \is_array($stored) ? $stored : null;
+        $this->storedRead = true;
+        $this->storedCopy = null;
+
+        try {
+            $stored = $this->store()->get(self::STORE_ID);
+        } catch (\Throwable $e) {
+            return null;
+        }
+
+        if (
+            \is_array($stored)
+            && isset($stored['fetched'], $stored['retrieved'], $stored['requirements'])
+            && \is_int($stored['fetched'])
+            && \is_string($stored['retrieved'])
+            && \is_array($stored['requirements'])
+            && (!isset($stored['memory']) || \is_string($stored['memory']))
+        ) {
+            $this->storedCopy = $stored;
+        }
+
+        return $this->storedCopy;
     }
 }
