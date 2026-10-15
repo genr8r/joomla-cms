@@ -113,6 +113,8 @@ class SupportDataTest extends UnitTestCase
             'newer than known'       => ['php', '9.0.0', 'healthy', 'PLG_HEALTHCHECK_SITEINFO_STATUS_NEWER', []],
             'gap in known cycles'    => ['mysql', '8.5.0', 'none', 'PLG_HEALTHCHECK_SITEINFO_STATUS_NO_DATA', []],
             'joomla dev version'     => ['joomla', '6.2.1-dev', 'healthy', 'PLG_HEALTHCHECK_SITEINFO_STATUS_SUPPORTED', ['2029-10-16']],
+            'empty version'          => ['mysql', '', 'none', 'PLG_HEALTHCHECK_SITEINFO_STATUS_NO_DATA', []],
+            'unparseable version'    => ['php', 'unknown', 'none', 'PLG_HEALTHCHECK_SITEINFO_STATUS_NO_DATA', []],
         ];
     }
 

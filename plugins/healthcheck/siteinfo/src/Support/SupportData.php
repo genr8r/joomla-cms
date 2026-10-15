@@ -180,6 +180,10 @@ final class SupportData
      */
     public function getEolStatus(string $product, string $version, \DateTimeImmutable $today): array
     {
+        if (self::normalize($version) === '') {
+            return $this->result(self::STATUS_NONE, 'NO_DATA');
+        }
+
         $cycle = self::cycleFor($product, $version);
         $dates = $this->getCycle($product, $cycle);
 
