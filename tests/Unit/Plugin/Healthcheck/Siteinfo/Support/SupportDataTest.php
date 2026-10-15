@@ -44,13 +44,13 @@ class SupportDataTest extends UnitTestCase
     public static function normalizeProvider(): array
     {
         return [
-            'plain'           => ['8.4.1', '8.4.1'],
-            'mariadb suffix'  => ['11.8.3-MariaDB-ubu2404', '11.8.3'],
-            'ubuntu mysql'    => ['8.0.36-0ubuntu0.22.04.1', '8.0.36'],
-            'joomla dev'      => ['6.2.1-dev', '6.2.1'],
-            'joomla alpha'    => ['6.3.0-alpha1', '6.3.0'],
-            'not a version'   => ['unknown', ''],
-            'empty'           => ['', ''],
+            'plain'          => ['8.4.1', '8.4.1'],
+            'mariadb suffix' => ['11.8.3-MariaDB-ubu2404', '11.8.3'],
+            'ubuntu mysql'   => ['8.0.36-0ubuntu0.22.04.1', '8.0.36'],
+            'joomla dev'     => ['6.2.1-dev', '6.2.1'],
+            'joomla alpha'   => ['6.3.0-alpha1', '6.3.0'],
+            'not a version'  => ['unknown', ''],
+            'empty'          => ['', ''],
         ];
     }
 
@@ -104,17 +104,17 @@ class SupportDataTest extends UnitTestCase
     public static function eolProvider(): array
     {
         return [
-            'eol passed'             => ['php', '8.1.2', 'critical', 'PLG_HEALTHCHECK_SITEINFO_STATUS_EOL_PAST', ['2025-12-31']],
-            'eol within 6 months'    => ['php', '8.2.5', 'warning', 'PLG_HEALTHCHECK_SITEINFO_STATUS_EOL_SOON', ['2026-12-31']],
-            'security fixes only'    => ['php', '8.3.10', 'warning', 'PLG_HEALTHCHECK_SITEINFO_STATUS_SECURITY_ONLY', ['2027-12-31']],
-            'supported'              => ['mariadb', '11.8.3', 'healthy', 'PLG_HEALTHCHECK_SITEINFO_STATUS_SUPPORTED', ['2028-06-04']],
-            'mariadb dev site'       => ['mariadb', '12.2.2-MariaDB', 'critical', 'PLG_HEALTHCHECK_SITEINFO_STATUS_EOL_PAST', ['2026-05-28']],
-            'older than known'       => ['php', '5.6.40', 'critical', 'PLG_HEALTHCHECK_SITEINFO_STATUS_EOL_OLD', []],
-            'newer than known'       => ['php', '9.0.0', 'healthy', 'PLG_HEALTHCHECK_SITEINFO_STATUS_NEWER', []],
-            'gap in known cycles'    => ['mysql', '8.5.0', 'none', 'PLG_HEALTHCHECK_SITEINFO_STATUS_NO_DATA', []],
-            'joomla dev version'     => ['joomla', '6.2.1-dev', 'healthy', 'PLG_HEALTHCHECK_SITEINFO_STATUS_SUPPORTED', ['2029-10-16']],
-            'empty version'          => ['mysql', '', 'none', 'PLG_HEALTHCHECK_SITEINFO_STATUS_NO_DATA', []],
-            'unparseable version'    => ['php', 'unknown', 'none', 'PLG_HEALTHCHECK_SITEINFO_STATUS_NO_DATA', []],
+            'eol passed'          => ['php', '8.1.2', 'critical', 'PLG_HEALTHCHECK_SITEINFO_STATUS_EOL_PAST', ['2025-12-31']],
+            'eol within 6 months' => ['php', '8.2.5', 'warning', 'PLG_HEALTHCHECK_SITEINFO_STATUS_EOL_SOON', ['2026-12-31']],
+            'security fixes only' => ['php', '8.3.10', 'warning', 'PLG_HEALTHCHECK_SITEINFO_STATUS_SECURITY_ONLY', ['2027-12-31']],
+            'supported'           => ['mariadb', '11.8.3', 'healthy', 'PLG_HEALTHCHECK_SITEINFO_STATUS_SUPPORTED', ['2028-06-04']],
+            'mariadb dev site'    => ['mariadb', '12.2.2-MariaDB', 'critical', 'PLG_HEALTHCHECK_SITEINFO_STATUS_EOL_PAST', ['2026-05-28']],
+            'older than known'    => ['php', '5.6.40', 'critical', 'PLG_HEALTHCHECK_SITEINFO_STATUS_EOL_OLD', []],
+            'newer than known'    => ['php', '9.0.0', 'healthy', 'PLG_HEALTHCHECK_SITEINFO_STATUS_NEWER', []],
+            'gap in known cycles' => ['mysql', '8.5.0', 'none', 'PLG_HEALTHCHECK_SITEINFO_STATUS_NO_DATA', []],
+            'joomla dev version'  => ['joomla', '6.2.1-dev', 'healthy', 'PLG_HEALTHCHECK_SITEINFO_STATUS_SUPPORTED', ['2029-10-16']],
+            'empty version'       => ['mysql', '', 'none', 'PLG_HEALTHCHECK_SITEINFO_STATUS_NO_DATA', []],
+            'unparseable version' => ['php', 'unknown', 'none', 'PLG_HEALTHCHECK_SITEINFO_STATUS_NO_DATA', []],
         ];
     }
 
@@ -169,12 +169,12 @@ class SupportDataTest extends UnitTestCase
     public static function requirementProvider(): array
     {
         return [
-            'below minimum'      => ['mariadb', '10.3.39', 'critical', 'PLG_HEALTHCHECK_SITEINFO_REQUIREMENT_BELOW_MINIMUM', ['10.4']],
-            'below supported'    => ['mariadb', '10.4.34', 'warning', 'PLG_HEALTHCHECK_SITEINFO_REQUIREMENT_BELOW_SUPPORTED', ['10.6']],
-            'below recommended'  => ['mariadb', '11.8.3-MariaDB', 'none', 'PLG_HEALTHCHECK_SITEINFO_REQUIREMENT_BELOW_RECOMMENDED', ['12.0']],
-            'web server note'    => ['nginx', '1.26.0', 'none', 'PLG_HEALTHCHECK_SITEINFO_REQUIREMENT_BELOW_RECOMMENDED', ['1.29']],
-            'web server old'     => ['nginx', '1.24.0', 'warning', 'PLG_HEALTHCHECK_SITEINFO_REQUIREMENT_BELOW_SUPPORTED', ['1.26']],
-            'php minimum'        => ['php', '8.2.29', 'critical', 'PLG_HEALTHCHECK_SITEINFO_REQUIREMENT_BELOW_MINIMUM', ['8.3.0']],
+            'below minimum'     => ['mariadb', '10.3.39', 'critical', 'PLG_HEALTHCHECK_SITEINFO_REQUIREMENT_BELOW_MINIMUM', ['10.4']],
+            'below supported'   => ['mariadb', '10.4.34', 'warning', 'PLG_HEALTHCHECK_SITEINFO_REQUIREMENT_BELOW_SUPPORTED', ['10.6']],
+            'below recommended' => ['mariadb', '11.8.3-MariaDB', 'none', 'PLG_HEALTHCHECK_SITEINFO_REQUIREMENT_BELOW_RECOMMENDED', ['12.0']],
+            'web server note'   => ['nginx', '1.26.0', 'none', 'PLG_HEALTHCHECK_SITEINFO_REQUIREMENT_BELOW_RECOMMENDED', ['1.29']],
+            'web server old'    => ['nginx', '1.24.0', 'warning', 'PLG_HEALTHCHECK_SITEINFO_REQUIREMENT_BELOW_SUPPORTED', ['1.26']],
+            'php minimum'       => ['php', '8.2.29', 'critical', 'PLG_HEALTHCHECK_SITEINFO_REQUIREMENT_BELOW_MINIMUM', ['8.3.0']],
         ];
     }
 
