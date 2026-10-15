@@ -139,12 +139,12 @@ final class SystemReport
         $execution = (int) ($ini['max_execution_time'] ?? 0);
         $post      = self::toBytes((string) ($ini['post_max_size'] ?? ''));
         $upload    = self::toBytes((string) ($ini['upload_max_filesize'] ?? ''));
-        $errors    = \in_array(strtolower((string) ($ini['display_errors'] ?? '')), ['1', 'on', 'true', 'yes', 'stderr'], true);
+        $errors    = \in_array(strtolower((string) ($ini['display_errors'] ?? '')), ['1', 'on', 'true', 'yes', 'stdout', 'stderr'], true);
 
         $rows = [
             ['memory_limit', (string) ($ini['memory_limit'] ?? ''), ['MEMORY', [$memoryLimit]], $memory !== -1 && $memory < self::toBytes($memoryLimit)],
             ['max_execution_time', (string) $execution, ['EXECUTION', []], $execution > 0 && $execution < 30],
-            ['post_max_size', (string) ($ini['post_max_size'] ?? ''), ['POST', [(string) ($ini['upload_max_filesize'] ?? '')]], $post !== -1 && $upload !== -1 && $post < $upload],
+            ['post_max_size', (string) ($ini['post_max_size'] ?? ''), ['POST', [(string) ($ini['upload_max_filesize'] ?? '')]], $post > 0 && $upload !== -1 && $post < $upload],
             ['opcache.enable', $opcacheEnabled ? 'JENABLED' : 'JDISABLED', ['OPCACHE', []], !$opcacheEnabled],
             ['display_errors', $errors ? 'JON' : 'JOFF', ['DISPLAY_ERRORS', []], $errors],
         ];

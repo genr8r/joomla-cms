@@ -110,6 +110,7 @@ class SystemReportTest extends UnitTestCase
             'iis'            => ['Microsoft-IIS/10.0', 'iis', 'Microsoft-IIS', '10.0'],
             'litespeed'      => ['LiteSpeed', null, 'LiteSpeed', ''],
             'hidden version' => ['Apache', 'apache', 'Apache', ''],
+            'cloudflare'     => ['cloudflare', null, 'cloudflare', ''],
             'empty'          => ['', null, '', ''],
         ];
     }
@@ -200,6 +201,28 @@ class SystemReportTest extends UnitTestCase
         );
 
         $this->assertSame(['healthy', 'healthy', 'healthy', 'healthy', 'healthy'], array_column($rows, 'status'));
+    }
+
+    /**
+     * @return  void
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    #[TestDox('treats post_max_size 0 as unlimited and display_errors stdout as on')]
+    public function testSettingsRowsEdgeValues(): void
+    {
+        $rows = SystemReport::settingsRows(
+            [
+                'memory_limit'        => '256M',
+                'max_execution_time'  => '30',
+                'post_max_size'       => '0',
+                'upload_max_filesize' => '64M',
+                'display_errors'      => 'stdout',
+            ],
+            true
+        );
+
+        $this->assertSame(['healthy', 'healthy', 'healthy', 'healthy', 'warning'], array_column($rows, 'status'));
     }
 
     /**
