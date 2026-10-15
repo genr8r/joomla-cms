@@ -96,7 +96,7 @@ final class Ssl extends CMSPlugin implements SubscriberInterface
         $target = CertificateProbe::target(Uri::root());
 
         if ($target === null) {
-            $probe = CertificateProbe::failure('The site URL has no host name.', $now);
+            $probe = CertificateProbe::failure(CertificateProbe::REASON_NO_HOST, $now);
         } else {
             $probe = $target['https'] ? $this->lookup($target['host'], $target['port'], $now) : null;
         }
@@ -189,7 +189,13 @@ final class Ssl extends CMSPlugin implements SubscriberInterface
             return $cached;
         }
 
-        $probe = $this->probe->probe($host, $port, CertificateStatus::timeout($this->params->get('timeout')));
+        try {
+            $probe = $this->probe->probe($host, $port, CertificateStatus::timeout($this->params->get('timeout')));
+        } catch (\Throwable $e) {
+            Log::add('SSL Health Check: the probe failed: ' . $e->getMessage(), Log::WARNING, 'healthcheck');
+
+            $probe = CertificateProbe::failure(CertificateProbe::REASON_PROBE_ERROR, $now);
+        }
 
         try {
             $this->cache()->store($probe, $id);
@@ -253,7 +259,8 @@ final class Ssl extends CMSPlugin implements SubscriberInterface
         }
 
         if ($probe['reason'] !== '') {
-            $parts[] = Text::sprintf('PLG_HEALTHCHECK_SSL_TITLE_REASON', $probe['reason']);
+            $reason  = str_starts_with($probe['reason'], 'PLG_HEALTHCHECK_SSL_REASON_') ? Text::_($probe['reason']) : $probe['reason'];
+            $parts[] = Text::sprintf('PLG_HEALTHCHECK_SSL_TITLE_REASON', $reason);
         }
 
         $parts[] = Text::sprintf(

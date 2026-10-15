@@ -126,6 +126,19 @@ class CertificateProbeTest extends UnitTestCase
      *
      * @since   __DEPLOY_VERSION__
      */
+    #[TestDox('uses the generic handshake reason when a warning is empty')]
+    public function testReasonFrom(): void
+    {
+        $this->assertSame(CertificateProbe::REASON_HANDSHAKE, CertificateProbe::reasonFrom(''));
+        $this->assertSame(CertificateProbe::REASON_HANDSHAKE, CertificateProbe::reasonFrom("  stream_socket_enable_crypto():  \n "));
+        $this->assertSame('Connection refused', CertificateProbe::reasonFrom('Connection refused'));
+    }
+
+    /**
+     * @return  void
+     *
+     * @since   __DEPLOY_VERSION__
+     */
     #[TestDox('reports a refused connection as a failure, not an exception')]
     public function testRefused(): void
     {

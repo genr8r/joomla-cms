@@ -22,6 +22,48 @@ namespace Joomla\Plugin\Healthcheck\Ssl\Certificate;
 final class CertificateProbe
 {
     /**
+     * Reason: the TLS handshake failed without any message.
+     *
+     * @since  __DEPLOY_VERSION__
+     */
+    public const REASON_HANDSHAKE = 'PLG_HEALTHCHECK_SSL_REASON_HANDSHAKE';
+
+    /**
+     * Reason: the site URL has no host name.
+     *
+     * @since  __DEPLOY_VERSION__
+     */
+    public const REASON_NO_HOST = 'PLG_HEALTHCHECK_SSL_REASON_NO_HOST';
+
+    /**
+     * Reason: the PHP OpenSSL extension is missing.
+     *
+     * @since  __DEPLOY_VERSION__
+     */
+    public const REASON_NO_OPENSSL = 'PLG_HEALTHCHECK_SSL_REASON_NO_OPENSSL';
+
+    /**
+     * Reason: the PHP stream socket functions are disabled.
+     *
+     * @since  __DEPLOY_VERSION__
+     */
+    public const REASON_NO_STREAMS = 'PLG_HEALTHCHECK_SSL_REASON_NO_STREAMS';
+
+    /**
+     * Reason: the probe threw unexpectedly.
+     *
+     * @since  __DEPLOY_VERSION__
+     */
+    public const REASON_PROBE_ERROR = 'PLG_HEALTHCHECK_SSL_REASON_PROBE_ERROR';
+
+    /**
+     * Reason: the certificate was received but could not be parsed.
+     *
+     * @since  __DEPLOY_VERSION__
+     */
+    public const REASON_UNREADABLE = 'PLG_HEALTHCHECK_SSL_REASON_UNREADABLE';
+
+    /**
      * Derive the host, port and scheme to check from the site root URL.
      *
      * @param   string  $rootUrl  The site root URL, as from Uri::root()
@@ -94,6 +136,22 @@ final class CertificateProbe
     }
 
     /**
+     * Clean a raw warning into a reason, falling back to the generic handshake reason when nothing is left.
+     *
+     * @param   string  $message  Warning text, possibly empty
+     *
+     * @return  string  Cleaned text, or a language key
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    public static function reasonFrom(string $message): string
+    {
+        $reason = self::cleanReason($message);
+
+        return $reason === '' ? self::REASON_HANDSHAKE : $reason;
+    }
+
+    /**
      * A probe result for a certificate that could not be read.
      *
      * @param   string   $reason     Why
@@ -110,7 +168,8 @@ final class CertificateProbe
 
     /**
      * Connect to the host, complete a TLS handshake and read its certificate.
-     * Verification failures are retried once without verification so the expiry date can still be reported.
+     * When the verified handshake connects but returns no certificate, it is retried once without verification
+     * so the expiry date can still be reported. A connection that fails is not retried.
      *
      * @param   string   $host     Host name or IP address
      * @param   integer  $port     TCP port
@@ -125,7 +184,13 @@ final class CertificateProbe
         $checkedAt = time();
 
         if (!\extension_loaded('openssl')) {
-            return self::failure('The PHP OpenSSL extension is not available.', $checkedAt);
+            return self::failure(self::REASON_NO_OPENSSL, $checkedAt);
+        }
+
+        foreach (['stream_socket_client', 'stream_socket_enable_crypto', 'stream_context_create', 'stream_context_get_options'] as $function) {
+            if (!\function_exists($function)) {
+                return self::failure(self::REASON_NO_STREAMS, $checkedAt);
+            }
         }
 
         $verified = $this->handshake($host, $port, $timeout, true);
@@ -134,18 +199,20 @@ final class CertificateProbe
             return $this->result($verified['certificate'], true, '', $checkedAt);
         }
 
-        // Only a failed verification is worth a second attempt; a refused or timed-out connection would just fail again.
-        if (!$verified['connected'] || !preg_match('/certificate|did not match/i', $verified['error'])) {
-            return self::failure(self::cleanReason($verified['error']), $checkedAt);
+        $reason = self::reasonFrom($verified['error']);
+
+        // A connection that failed would just fail again; only a connected but unverified handshake is retried.
+        if (!$verified['connected']) {
+            return self::failure($reason, $checkedAt);
         }
 
         $unverified = $this->handshake($host, $port, $timeout, false);
 
         if ($unverified['certificate'] === null) {
-            return self::failure(self::cleanReason($verified['error']), $checkedAt);
+            return self::failure($reason, $checkedAt);
         }
 
-        return $this->result($unverified['certificate'], false, self::cleanReason($verified['error']), $checkedAt);
+        return $this->result($unverified['certificate'], false, $reason, $checkedAt);
     }
 
     /**
@@ -165,7 +232,7 @@ final class CertificateProbe
         $parsed = self::parse($certificate);
 
         if ($parsed === null) {
-            return self::failure('The certificate could not be read.', $checkedAt);
+            return self::failure(self::REASON_UNREADABLE, $checkedAt);
         }
 
         return ['ok' => true, 'trusted' => $trusted, 'reason' => $reason] + $parsed + ['checkedAt' => $checkedAt];
