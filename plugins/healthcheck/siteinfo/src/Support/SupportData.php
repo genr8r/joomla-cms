@@ -104,6 +104,64 @@ final class SupportData
     ];
 
     /**
+     * Joomla 6.x requirements: [recommended, supported, minimum]. Minimum null = not enforced.
+     * Source: https://manual.joomla.org/docs/next/get-started/technical-requirements/ (retrieved 2026-10-15)
+     *
+     * @since  __DEPLOY_VERSION__
+     */
+    private const REQUIREMENTS = [
+        'php'        => ['8.4', '8.3.0', '8.3.0'],
+        'mysql'      => ['8.4', '8.0.13', '8.0.13'],
+        'mariadb'    => ['12.0', '10.6', '10.4'],
+        'postgresql' => ['17.6', '14.0', '12.0'],
+        'apache'     => ['2.4', '2.4', null],
+        'nginx'      => ['1.29', '1.26', null],
+        'iis'        => ['10', '10', null],
+    ];
+
+    /**
+     * The manual page holding Joomla's technical requirements
+     *
+     * @since  __DEPLOY_VERSION__
+     */
+    public const MANUAL_URL = 'https://manual.joomla.org/docs/get-started/technical-requirements/';
+
+    /**
+     * Row names on the manual page mapped to products
+     *
+     * @since  __DEPLOY_VERSION__
+     */
+    private const MANUAL_PRODUCTS = [
+        'php'           => 'php',
+        'mysql'         => 'mysql',
+        'mariadb'       => 'mariadb',
+        'postgresql'    => 'postgresql',
+        'apache'        => 'apache',
+        'nginx'         => 'nginx',
+        'microsoft iis' => 'iis',
+    ];
+
+    /**
+     * Requirements in use (built-in, with refreshed products replaced)
+     *
+     * @var    array
+     * @since  __DEPLOY_VERSION__
+     */
+    private array $requirements;
+
+    /**
+     * Constructor
+     *
+     * @param   array  $requirements  Refreshed requirements, [product => [recommended, supported, ?minimum]]
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    public function __construct(array $requirements = [])
+    {
+        $this->requirements = array_merge(self::REQUIREMENTS, array_intersect_key($requirements, self::REQUIREMENTS));
+    }
+
+    /**
      * Strip vendor and pre-release suffixes, keeping the leading numeric version.
      *
      * @param   string  $version  The raw version string
@@ -222,6 +280,93 @@ final class SupportData
     }
 
     /**
+     * Classify a version against Joomla's own requirements.
+     *
+     * @param   string  $product  The product name
+     * @param   string  $version  The detected version
+     *
+     * @return  array|null  ['status' => string, 'key' => language key, 'args' => list<string>], null if nothing to report
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    public function getRequirementStatus(string $product, string $version): ?array
+    {
+        $version = self::normalize($version);
+
+        if ($version === '' || !isset($this->requirements[$product])) {
+            return null;
+        }
+
+        [$recommended, $supported, $minimum] = $this->requirements[$product];
+
+        if ($minimum !== null && version_compare($version, $minimum, '<')) {
+            return $this->requirement(self::STATUS_CRITICAL, 'BELOW_MINIMUM', $minimum);
+        }
+
+        if (version_compare($version, $supported, '<')) {
+            return $this->requirement(self::STATUS_WARNING, 'BELOW_SUPPORTED', $supported);
+        }
+
+        if (version_compare($version, $recommended, '<')) {
+            return $this->requirement(self::STATUS_NONE, 'BELOW_RECOMMENDED', $recommended);
+        }
+
+        return null;
+    }
+
+    /**
+     * Read Joomla's requirements for one major version from the manual's Technical Requirements page.
+     *
+     * This is the only place that knows the page's structure. Replace it if the manual publishes structured data.
+     *
+     * @param   string   $html   The page HTML
+     * @param   integer  $major  The Joomla major version
+     *
+     * @return  array  ['requirements' => [product => [recommended, supported, ?minimum]], 'memory' => ?string]
+     *
+     * @throws  \UnexpectedValueException
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    public static function parseManual(string $html, int $major): array
+    {
+        $document = new \DOMDocument();
+        $previous = libxml_use_internal_errors(true);
+        $document->loadHTML($html);
+        libxml_clear_errors();
+        libxml_use_internal_errors($previous);
+
+        $xpath   = new \DOMXPath($document);
+        $heading = 'Requirements for Joomla! ' . $major . '.x';
+        $table   = $xpath->query('(//h2|//h3)[contains(normalize-space(.), "' . $heading . '")]/following-sibling::table[1]')->item(0);
+
+        if ($table === null) {
+            throw new \UnexpectedValueException('No "' . $heading . '" table on the manual page');
+        }
+
+        $requirements = [];
+
+        foreach ($xpath->query('.//tbody/tr', $table) as $row) {
+            $cells   = array_map(static fn (\DOMNode $cell): string => trim($cell->textContent), iterator_to_array($xpath->query('./td', $row)));
+            $product = self::MANUAL_PRODUCTS[strtolower($cells[0] ?? '')] ?? null;
+
+            if ($product === null || \count($cells) < 4 || $cells[1] === '' || $cells[2] === '') {
+                continue;
+            }
+
+            $requirements[$product] = [$cells[1], $cells[2], $cells[3] === '' ? null : $cells[3]];
+        }
+
+        if (!isset($requirements['php'])) {
+            throw new \UnexpectedValueException('No PHP row in the "' . $heading . '" table');
+        }
+
+        $memory = preg_match('/Recommended PHP Memory Limit:\s*at least\s*(\d+)\s*MB/i', $document->textContent, $matches) ? $matches[1] . 'M' : null;
+
+        return ['requirements' => $requirements, 'memory' => $memory];
+    }
+
+    /**
      * Build a status result.
      *
      * @param   string  $status  The status
@@ -236,5 +381,21 @@ final class SupportData
     private function result(string $status, string $key, array $args = [], string $eol = ''): array
     {
         return ['status' => $status, 'key' => 'PLG_HEALTHCHECK_SITEINFO_STATUS_' . $key, 'args' => $args, 'eol' => $eol];
+    }
+
+    /**
+     * Build a requirement result.
+     *
+     * @param   string  $status   The status
+     * @param   string  $key      Language key suffix after PLG_HEALTHCHECK_SITEINFO_REQUIREMENT_
+     * @param   string  $version  The threshold version
+     *
+     * @return  array
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    private function requirement(string $status, string $key, string $version): array
+    {
+        return ['status' => $status, 'key' => 'PLG_HEALTHCHECK_SITEINFO_REQUIREMENT_' . $key, 'args' => [$version]];
     }
 }

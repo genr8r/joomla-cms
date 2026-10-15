@@ -160,4 +160,120 @@ class SupportDataTest extends UnitTestCase
         $this->assertTrue($data->hasEolData('postgresql'));
         $this->assertFalse($data->hasEolData('nginx'));
     }
+
+    /**
+     * @return  array
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    public static function requirementProvider(): array
+    {
+        return [
+            'below minimum'      => ['mariadb', '10.3.39', 'critical', 'PLG_HEALTHCHECK_SITEINFO_REQUIREMENT_BELOW_MINIMUM', ['10.4']],
+            'below supported'    => ['mariadb', '10.4.34', 'warning', 'PLG_HEALTHCHECK_SITEINFO_REQUIREMENT_BELOW_SUPPORTED', ['10.6']],
+            'below recommended'  => ['mariadb', '11.8.3-MariaDB', 'none', 'PLG_HEALTHCHECK_SITEINFO_REQUIREMENT_BELOW_RECOMMENDED', ['12.0']],
+            'web server note'    => ['nginx', '1.26.0', 'none', 'PLG_HEALTHCHECK_SITEINFO_REQUIREMENT_BELOW_RECOMMENDED', ['1.29']],
+            'web server old'     => ['nginx', '1.24.0', 'warning', 'PLG_HEALTHCHECK_SITEINFO_REQUIREMENT_BELOW_SUPPORTED', ['1.26']],
+            'php minimum'        => ['php', '8.2.29', 'critical', 'PLG_HEALTHCHECK_SITEINFO_REQUIREMENT_BELOW_MINIMUM', ['8.3.0']],
+        ];
+    }
+
+    /**
+     * @return  void
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    #[DataProvider('requirementProvider')]
+    #[TestDox('checks $product $version against Joomla requirements as $status')]
+    public function testRequirementStatus(string $product, string $version, string $status, string $key, array $args): void
+    {
+        $result = (new SupportData())->getRequirementStatus($product, $version);
+
+        $this->assertSame($status, $result['status']);
+        $this->assertSame($key, $result['key']);
+        $this->assertSame($args, $result['args']);
+    }
+
+    /**
+     * @return  void
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    #[TestDox('has no requirement message for recommended or unknown products')]
+    public function testRequirementStatusNull(): void
+    {
+        $data = new SupportData();
+
+        $this->assertNull($data->getRequirementStatus('mariadb', '12.0.2'));
+        $this->assertNull($data->getRequirementStatus('apache', '2.4.62'));
+        $this->assertNull($data->getRequirementStatus('php', '8.4.1'));
+        $this->assertNull($data->getRequirementStatus('litespeed', '6.3'));
+        $this->assertNull($data->getRequirementStatus('mariadb', ''));
+    }
+
+    /**
+     * @return  void
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    #[TestDox('lets refreshed requirements replace built-in ones per product')]
+    public function testRequirementOverride(): void
+    {
+        $data = new SupportData(['mariadb' => ['12.3', '11.4', '10.6']]);
+
+        $this->assertSame('critical', $data->getRequirementStatus('mariadb', '10.5.27')['status']);
+        $this->assertSame(['8.3.0'], $data->getRequirementStatus('php', '8.2.29')['args']);
+    }
+
+    /**
+     * @return  void
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    #[TestDox('parses the manual Technical Requirements page')]
+    public function testParseManual(): void
+    {
+        $html   = file_get_contents(__DIR__ . '/fixtures/technical-requirements.html');
+        $result = SupportData::parseManual($html, 6);
+
+        $this->assertSame(
+            [
+                'php'        => ['8.4', '8.3.0', '8.3.0'],
+                'mysql'      => ['8.4', '8.0.13', '8.0.13'],
+                'mariadb'    => ['12.0', '10.6', '10.4'],
+                'postgresql' => ['17.6', '14.0', '12.0'],
+                'apache'     => ['2.4', '2.4', null],
+                'nginx'      => ['1.29', '1.26', null],
+                'iis'        => ['10', '10', null],
+            ],
+            $result['requirements']
+        );
+        $this->assertSame('256M', $result['memory']);
+    }
+
+    /**
+     * @return  void
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    #[TestDox('rejects a manual page without requirements for the running major version')]
+    public function testParseManualMissingMajor(): void
+    {
+        $this->expectException(\UnexpectedValueException::class);
+
+        SupportData::parseManual(file_get_contents(__DIR__ . '/fixtures/technical-requirements.html'), 7);
+    }
+
+    /**
+     * @return  void
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    #[TestDox('rejects a manual page whose heading has no table')]
+    public function testParseManualMissingTable(): void
+    {
+        $this->expectException(\UnexpectedValueException::class);
+
+        SupportData::parseManual('<html><body><h3>Requirements for Joomla! 6.x</h3><p>Moved.</p></body></html>', 6);
+    }
 }
