@@ -12,7 +12,9 @@ namespace Joomla\Plugin\Healthcheck\Siteinfo\Extension;
 
 use Joomla\CMS\Cache\CacheControllerFactoryAwareTrait;
 use Joomla\CMS\Cache\Controller\OutputController;
+use Joomla\CMS\Event\Plugin\AjaxEvent;
 use Joomla\CMS\Language\Text;
+use Joomla\CMS\Log\Log;
 use Joomla\CMS\Plugin\CMSPlugin;
 use Joomla\CMS\Session\Session;
 use Joomla\CMS\Uri\Uri;
@@ -70,6 +72,7 @@ final class Siteinfo extends CMSPlugin implements SubscriberInterface
         return [
             'onHealthcheckGetIcons'  => 'onHealthcheckGetIcons',
             'onHealthcheckGetTables' => 'onHealthcheckGetTables',
+            'onAjaxSiteinfo'         => 'onAjaxSiteinfo',
         ];
     }
 
@@ -172,6 +175,54 @@ final class Siteinfo extends CMSPlugin implements SubscriberInterface
         $result[] = [$versions, $settingsTable];
 
         $event->setArgument('result', $result);
+    }
+
+    /**
+     * Refreshes Joomla's requirements from the manual when a Super User clicks Refresh Requirements.
+     *
+     * @param   AjaxEvent  $event  The Ajax event
+     *
+     * @return  void
+     *
+     * @throws  \RuntimeException  On a missing token or permission
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    public function onAjaxSiteinfo(AjaxEvent $event): void
+    {
+        $app = $this->getApplication();
+
+        if (!Session::checkToken('get') || !$app->getIdentity()->authorise('core.admin')) {
+            throw new \RuntimeException(Text::_('JERROR_ALERTNOAUTHOR'), 403);
+        }
+
+        $this->loadLanguage();
+
+        $stored = $this->readStored();
+
+        if ($stored !== null && time() - $stored['fetched'] < 3600) {
+            $app->enqueueMessage(Text::_('PLG_HEALTHCHECK_SITEINFO_REFRESH_RECENT'), 'info');
+        } else {
+            try {
+                $response = $this->httpFactory->getHttp()->get(SupportData::MANUAL_URL, [], 5);
+
+                if ($response->getStatusCode() !== 200) {
+                    throw new \RuntimeException('HTTP ' . $response->getStatusCode());
+                }
+
+                $parsed = SupportData::parseManual((string) $response->getBody(), (int) JVERSION);
+
+                $this->store()->store(['fetched' => time(), 'retrieved' => gmdate('Y-m-d')] + $parsed, self::STORE_ID);
+                $app->enqueueMessage(Text::_('PLG_HEALTHCHECK_SITEINFO_REFRESH_DONE'), 'success');
+            } catch (\Throwable $e) {
+                Log::add('Site Information: could not refresh requirements from the manual: ' . $e->getMessage(), Log::WARNING, 'healthcheck');
+                $app->enqueueMessage(Text::sprintf('PLG_HEALTHCHECK_SITEINFO_REFRESH_FAILED', $e->getMessage()), 'warning');
+            }
+        }
+
+        $return = base64_decode($app->getInput()->getBase64('return', ''));
+
+        $app->redirect(Uri::isInternal($return) ? $return : 'index.php?option=com_cpanel&view=cpanel&dashboard=healthcheck');
     }
 
     /**
