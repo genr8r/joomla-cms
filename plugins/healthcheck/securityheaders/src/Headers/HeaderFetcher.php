@@ -59,7 +59,7 @@ final class HeaderFetcher
     }
 
     /**
-     * Request the URL (HEAD, falling back to GET), following up to three redirects, and return the final response's headers.
+     * Request the URL (HEAD, with one GET fallback when HEAD is refused with 405 or 501 or returns no headers), following up to three redirects, and return the final response's headers.
      *
      * @param   string   $url      The site root URL
      * @param   integer  $timeout  Seconds per request
@@ -250,7 +250,8 @@ final class HeaderFetcher
     }
 
     /**
-     * HEAD the URL; fall back to one GET if HEAD fails, is refused, or returns no headers.
+     * HEAD the URL; fall back to one GET only if HEAD answered 405 or 501 or returned no headers. A HEAD that throws
+     * (timeout, refused connection) propagates, so a dead host is waited on once, not twice.
      *
      * @param   Http     $http     Client
      * @param   string   $url      URL
@@ -258,18 +259,16 @@ final class HeaderFetcher
      *
      * @return  Response
      *
+     * @throws  \Throwable  When the HEAD request fails
+     *
      * @since   __DEPLOY_VERSION__
      */
     private function request(Http $http, string $url, int $timeout): Response
     {
-        try {
-            $response = $http->head($url, [], $timeout);
+        $response = $http->head($url, [], $timeout);
 
-            if (!\in_array($response->getStatusCode(), [405, 501], true) && $response->getHeaders() !== []) {
-                return $response;
-            }
-        } catch (\Throwable $e) {
-            // Some servers reject HEAD outright; GET below is the fallback.
+        if (!\in_array($response->getStatusCode(), [405, 501], true) && $response->getHeaders() !== []) {
+            return $response;
         }
 
         return $http->get($url, [], $timeout);

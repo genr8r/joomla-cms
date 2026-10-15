@@ -179,6 +179,15 @@ class HeaderScoreTest extends UnitTestCase
             'conflicting duplicates' => [['x-frame-options' => 'DENY, SAMEORIGIN'], 0],
             'allow-from'             => [['x-frame-options' => 'ALLOW-FROM https://example.org'], 0],
             'csp frame-ancestors'    => [['content-security-policy' => "default-src 'self'; frame-ancestors 'self'"], 15],
+            'fa none'                => [['content-security-policy' => "frame-ancestors 'none'"], 15],
+            'fa host'                => [['content-security-policy' => 'frame-ancestors https://example.org'], 15],
+            'fa two headers'         => [['content-security-policy' => "default-src 'self', frame-ancestors 'self'"], 15],
+            'fa wildcard'            => [['content-security-policy' => 'frame-ancestors *'], 0],
+            'fa bare scheme'         => [['content-security-policy' => 'frame-ancestors https:'], 0],
+            'fa bare schemes'        => [['content-security-policy' => 'frame-ancestors http: https:'], 0],
+            'fa wildcard + scheme'   => [['content-security-policy' => 'frame-ancestors * https:'], 0],
+            'fa empty'               => [['content-security-policy' => 'frame-ancestors; default-src \'self\''], 0],
+            'fa lookalike'           => [['content-security-policy' => "frame-ancestors-x 'self'"], 0],
             'report-only only'       => [['content-security-policy-report-only' => "frame-ancestors 'self'"], 0],
             'missing'                => [[], 0],
         ];
@@ -340,5 +349,66 @@ class HeaderScoreTest extends UnitTestCase
         unset($success['permissions-policy'], $success['cross-origin-opener-policy'], $success['referrer-policy']);
 
         $this->assertSame([80, 'success'], array_values(array_intersect_key(HeaderScore::evaluate($success, true), ['score' => 0, 'status' => 0])));
+    }
+
+    /**
+     * @return  array
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    public static function hstsRepeatProvider(): array
+    {
+        return [
+            'identical twice' => ['max-age=31536000, max-age=31536000', 25],
+            'first is full'   => ['max-age=31536000, max-age=63072000; includeSubDomains; preload', 25],
+            'first wins'      => ['max-age=100, max-age=31536000', 10],
+        ];
+    }
+
+    /**
+     * @param   string   $value   HSTS header value
+     * @param   integer  $points  Expected points
+     *
+     * @return  void
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    #[DataProvider('hstsRepeatProvider')]
+    #[TestDox('scores only the first of repeated Strict-Transport-Security headers')]
+    public function testHstsRepeated(string $value, int $points): void
+    {
+        $result = HeaderScore::evaluate(['strict-transport-security' => $value], true);
+
+        $this->assertSame($points, self::item($result, 'hsts')['points']);
+    }
+
+    /**
+     * @return  void
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    #[TestDox('switches status exactly at the 50 and 80 boundaries')]
+    public function testStatusBoundaries(): void
+    {
+        $csp      = ['content-security-policy' => "default-src 'self'"];
+        $frame    = ['x-frame-options' => 'DENY'];
+        $referrer = ['referrer-policy' => 'no-referrer'];
+        $nosniff  = ['x-content-type-options' => 'nosniff'];
+        $hsts     = ['strict-transport-security' => 'max-age=31536000'];
+        $leak     = ['server' => 'Apache/2.4.62'];
+
+        $cases = [
+            // 25 + 15 + 5 (permissions) = 45; scores move in steps of 5, so 49 and 79 cannot occur.
+            [$csp + $frame + ['permissions-policy' => 'a=()'], 45, 'error'],
+            [$csp + $frame + $referrer, 50, 'warning'],
+            [$hsts + $csp + $frame + $nosniff + $leak, 75, 'warning'],
+            [$hsts + $csp + $frame + $nosniff, 80, 'success'],
+        ];
+
+        foreach ($cases as [$headers, $score, $status]) {
+            $result = HeaderScore::evaluate($headers, true);
+
+            $this->assertSame([$score, $status], [$result['score'], $result['status']]);
+        }
     }
 }

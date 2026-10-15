@@ -204,6 +204,8 @@ final class Securityheaders extends CMSPlugin implements SubscriberInterface
         $response = $this->response();
         $reason   = str_starts_with($response['reason'], 'PLG_HEALTHCHECK_SECURITYHEADERS_REASON_') ? Text::_($response['reason']) : $response['reason'];
 
+        $reason = rtrim($reason, '. ') . '.';
+
         $this->append($event, [[
             'link'  => $this->refreshLink(),
             'icon'  => 'fas fa-shield-halved',

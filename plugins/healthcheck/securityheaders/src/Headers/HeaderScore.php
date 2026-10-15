@@ -97,7 +97,9 @@ final class HeaderScore
             return self::item('hsts', 0, 25, $value, 'PLG_HEALTHCHECK_SECURITYHEADERS_FIX_HSTS_HTTP');
         }
 
-        $age = preg_match('/(?:^|;)\s*max-age\s*=\s*"?(\d+)"?\s*(?:;|$)/i', $value, $matches) ? (int) $matches[1] : 0;
+        // Browsers process only the first Strict-Transport-Security header (RFC 6797 section 8.1); repeats are joined with a comma.
+        $value = explode(',', $value, 2)[0];
+        $age   = preg_match('/(?:^|;)\s*max-age\s*=\s*"?(\d+)"?\s*(?:;|$)/i', $value, $matches) ? (int) $matches[1] : 0;
 
         return self::item('hsts', $age >= self::HSTS_MIN_AGE ? 25 : ($age > 0 ? 10 : 0), 25, $value);
     }
@@ -135,11 +137,35 @@ final class HeaderScore
     {
         $item = self::single('frame', 15, $xfo, ['deny', 'sameorigin']);
 
-        if ($item['points'] === 0 && preg_match('/(?:^|;)\s*(frame-ancestors\b[^;]*)/i', $csp, $matches)) {
-            return self::item('frame', 15, 15, trim($matches[1]));
+        if (
+            $item['points'] === 0
+            && preg_match('/(?:^|[;,])\s*frame-ancestors(?=\s|;|,|$)([^;,]*)/i', $csp, $matches)
+            && self::restrictsFraming(trim($matches[1]))
+        ) {
+            return self::item('frame', 15, 15, 'frame-ancestors ' . trim($matches[1]));
         }
 
         return $item;
+    }
+
+    /**
+     * Whether a frame-ancestors source list limits who can embed the page: not empty, not "*", not only bare schemes.
+     *
+     * @param   string  $sources  The directive's source list
+     *
+     * @return  boolean
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    private static function restrictsFraming(string $sources): bool
+    {
+        foreach (preg_split('/\s+/', $sources, -1, PREG_SPLIT_NO_EMPTY) ?: [] as $source) {
+            if ($source !== '*' && !preg_match('/^[a-z][a-z0-9+.-]*:$/i', $source)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

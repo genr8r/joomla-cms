@@ -10,9 +10,13 @@
 
 namespace Joomla\Tests\Unit\Plugin\Healthcheck\Securityheaders\Headers;
 
+use Joomla\Http\Http;
 use Joomla\Http\HttpFactory;
+use Joomla\Http\Response;
+use Joomla\Http\TransportInterface;
 use Joomla\Plugin\Healthcheck\Securityheaders\Headers\HeaderFetcher;
 use Joomla\Tests\Unit\UnitTestCase;
+use Joomla\Uri\UriInterface;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\TestDox;
 
@@ -139,5 +143,149 @@ class HeaderFetcherTest extends UnitTestCase
         $this->assertSame([], $result['headers']);
         $this->assertNotSame('', $result['reason']);
         $this->assertSame('http://127.0.0.1:1/', $result['url']);
+    }
+
+    /**
+     * Build a fetcher whose HTTP client replays canned responses and records the calls.
+     *
+     * @param   array  $script  One entry per request: a Response, or a Throwable to throw
+     * @param   array  $calls   Receives "METHOD url" for each request
+     *
+     * @return  HeaderFetcher
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    private static function scripted(array $script, array &$calls): HeaderFetcher
+    {
+        $transport = new class ($script, $calls) implements TransportInterface {
+            public function __construct(private array $script, private array &$calls)
+            {
+            }
+
+            public function request($method, UriInterface $uri, $data = null, array $headers = [], $timeout = null, $userAgent = null)
+            {
+                $this->calls[] = $method . ' ' . $uri;
+                $next          = array_shift($this->script);
+
+                if ($next instanceof \Throwable) {
+                    throw $next;
+                }
+
+                return $next;
+            }
+
+            public static function isSupported()
+            {
+                return true;
+            }
+        };
+
+        $factory = new class (new Http([], $transport)) extends HttpFactory {
+            public function __construct(private Http $http)
+            {
+            }
+
+            public function getHttp($options = [], $adapters = null)
+            {
+                return $this->http;
+            }
+        };
+
+        return new HeaderFetcher($factory);
+    }
+
+    /**
+     * @param   integer  $status   Status code
+     * @param   array    $headers  Headers
+     *
+     * @return  Response
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    private static function response(int $status, array $headers): Response
+    {
+        $response = new Response();
+        $response = $response->withStatus($status);
+
+        foreach ($headers as $name => $value) {
+            $response = $response->withHeader($name, $value);
+        }
+
+        return $response;
+    }
+
+    /**
+     * @return  void
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    #[TestDox('does not retry with GET when HEAD throws (one timeout, not two)')]
+    public function testHeadThrowsNoGet(): void
+    {
+        $calls   = [];
+        $fetcher = self::scripted([new \RuntimeException('Operation timed out')], $calls);
+        $result  = $fetcher->fetch('https://example.org/', 1);
+
+        $this->assertSame(['HEAD https://example.org/'], $calls);
+        $this->assertFalse($result['ok']);
+        $this->assertSame('Operation timed out', $result['reason']);
+    }
+
+    /**
+     * @return  void
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    #[TestDox('falls back to one GET when HEAD answers 405 and uses the GET headers')]
+    public function testHead405FallsBackToGet(): void
+    {
+        $calls   = [];
+        $fetcher = self::scripted(
+            [self::response(405, ['Allow' => 'GET']), self::response(200, ['X-Frame-Options' => 'DENY'])],
+            $calls
+        );
+        $result = $fetcher->fetch('https://example.org/', 1);
+
+        $this->assertSame(['HEAD https://example.org/', 'GET https://example.org/'], $calls);
+        $this->assertTrue($result['ok']);
+        $this->assertSame(['x-frame-options' => 'DENY'], $result['headers']);
+    }
+
+    /**
+     * @return  void
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    #[TestDox('follows a relative Location and reports the final URL')]
+    public function testFollowsRelativeRedirect(): void
+    {
+        $calls   = [];
+        $fetcher = self::scripted(
+            [self::response(301, ['Location' => '/en/']), self::response(200, ['Server' => 'Caddy'])],
+            $calls
+        );
+        $result = $fetcher->fetch('https://example.org/', 1);
+
+        $this->assertSame(['HEAD https://example.org/', 'HEAD https://example.org/en/'], $calls);
+        $this->assertTrue($result['ok']);
+        $this->assertSame('https://example.org/en/', $result['url']);
+    }
+
+    /**
+     * @return  void
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    #[TestDox('gives up after following three redirects')]
+    public function testRedirectLimit(): void
+    {
+        $calls    = [];
+        $redirect = self::response(302, ['Location' => '/next']);
+        $fetcher  = self::scripted([$redirect, $redirect, $redirect, $redirect], $calls);
+        $result   = $fetcher->fetch('https://example.org/', 1);
+
+        $this->assertCount(4, $calls);
+        $this->assertFalse($result['ok']);
+        $this->assertSame(HeaderFetcher::REASON_REDIRECTS, $result['reason']);
     }
 }
