@@ -68,7 +68,7 @@ foreach ($errors as $error) {
         'stack'      => (string) $error['stack'],
         'location'   => $location,
         'source'     => $source,
-        'seen'       => Text::sprintf('PLG_HEALTHCHECK_FRONTENDERRORS_SEEN', (int) $error['hits']),
+        'seen'       => Text::plural('PLG_HEALTHCHECK_FRONTENDERRORS_N_TIMES', (int) $error['hits']),
         'first_seen' => $date((string) $error['first_seen']),
         'last_seen'  => $date((string) $error['last_seen']),
         'origin'     => match (true) {
