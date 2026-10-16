@@ -16,7 +16,6 @@ use Joomla\CMS\Plugin\PluginHelper;
 use Joomla\Database\DatabaseInterface;
 use Joomla\DI\Container;
 use Joomla\DI\ServiceProviderInterface;
-use Joomla\Event\DispatcherInterface;
 use Joomla\Plugin\Healthcheck\Frontenderrors\Model\ErrorRepository;
 use Joomla\Plugin\System\Frontenderrors\Extension\Frontenderrors;
 
@@ -45,7 +44,6 @@ return new class () implements ServiceProviderInterface {
                     $repository
                 );
                 $plugin->setApplication(Factory::getApplication());
-                $plugin->setDispatcher($container->get(DispatcherInterface::class));
 
                 return $plugin;
             }
