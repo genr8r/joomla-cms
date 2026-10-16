@@ -112,8 +112,13 @@ final class ReportNormaliser
     public static function scrub(string $text): string
     {
         $text = preg_replace('/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i', '[redacted]', $text) ?? $text;
+        $text = preg_replace(
+            '/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i',
+            '[redacted]',
+            $text
+        ) ?? $text;
         $text = preg_replace_callback(
-            '/[A-Za-z0-9+\/_-]{16,}={0,2}/',
+            '/[A-Za-z0-9+_]{16,}={0,2}/',
             static fn (array $m): string => preg_match('/\d/', $m[0]) ? '[redacted]' : $m[0],
             $text
         ) ?? $text;

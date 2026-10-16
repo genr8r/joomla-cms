@@ -150,6 +150,25 @@ class ReportNormaliserTest extends UnitTestCase
         $this->assertSame('/joomla/profile/[redacted]', $out[0]['page']);
     }
 
+    public function testScrubKeepsOrdinaryPages(): void
+    {
+        foreach ([
+            '/joomla/en/blog/2024-news',
+            '/joomla/index.php/component/content/article/5-faq',
+            '/joomla/en/2024-annual-report-final-version',
+        ] as $page) {
+            $this->assertSame($page, self::norm([self::report()], $page)[0]['page'], $page);
+        }
+    }
+
+    public function testScrubRedactsUuid(): void
+    {
+        $this->assertSame(
+            'user [redacted] failed',
+            ReportNormaliser::scrub('user 123e4567-e89b-12d3-a456-426614174000 failed')
+        );
+    }
+
     public function testFingerprintStable(): void
     {
         $a = self::norm([self::report(['file' => 'https://example.org/joomla/a.js?v=1'])]);
