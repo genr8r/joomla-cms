@@ -117,10 +117,16 @@
   window.addEventListener('error', guard((e) => {
     const t = e.target;
 
-    if (t && t !== window && /^(SCRIPT|LINK|IMG)$/.test(t.tagName)) {
+    if (e instanceof ErrorEvent || !t || t === window) {
+      add('error', e.message, e.filename, e.lineno, e.colno, e.error && e.error.stack);
+    } else if (/^(SCRIPT|LINK|IMG)$/.test(t.tagName)) {
       add('resource', `Failed to load ${t.tagName.toLowerCase()}`, t.src || t.href);
     } else {
-      add('error', e.message, e.filename, e.lineno, e.colno, e.error && e.error.stack);
+      const src = t.currentSrc || t.src || t.href;
+
+      if (src) {
+        add('resource', `Failed to load ${String(t.tagName).toLowerCase()}`, src);
+      }
     }
   }), true);
 
