@@ -128,18 +128,20 @@ final class Siteinfo extends CMSPlugin implements SubscriberInterface
         $result   = $event->getArgument('result', []);
         $result[] = [
             [
-                'link'   => '#plg_healthcheck_siteinfo_versions',
-                'icon'   => 'fas fa-server',
-                'amount' => \count($attention),
-                'text'   => Text::_('PLG_HEALTHCHECK_SITEINFO_ICON_TEXT'),
-                'id'     => 'plg_healthcheck_siteinfo_support',
-                'status' => $this->tableStatus(array_column($rows, 'status')),
+                'link'    => '#plg_healthcheck_siteinfo_versions',
+                'icon'    => 'fas fa-server',
+                'section' => Text::_('PLG_HEALTHCHECK_SITEINFO_SECTION'),
+                'amount'  => \count($attention),
+                'text'    => Text::_('PLG_HEALTHCHECK_SITEINFO_ICON_TEXT'),
+                'id'      => 'plg_healthcheck_siteinfo_support',
+                'status'  => $this->tableStatus(array_column($rows, 'status')),
             ],
             [
-                'link' => 'index.php?option=com_ajax&group=healthcheck&plugin=siteinfo&format=raw&' . Session::getFormToken() . '=1&return=' . urlencode($return),
-                'icon' => 'fas fa-rotate',
-                'text' => Text::_('PLG_HEALTHCHECK_SITEINFO_ICON_REFRESH'),
-                'id'   => 'plg_healthcheck_siteinfo_refresh',
+                'link'    => 'index.php?option=com_ajax&group=healthcheck&plugin=siteinfo&format=raw&' . Session::getFormToken() . '=1&return=' . urlencode($return),
+                'icon'    => 'icon-sync',
+                'section' => Text::_('PLG_HEALTHCHECK_SITEINFO_SECTION'),
+                'text'    => Text::_('PLG_HEALTHCHECK_SITEINFO_ICON_REFRESH'),
+                'id'      => 'plg_healthcheck_siteinfo_refresh',
             ],
         ];
 
@@ -166,6 +168,7 @@ final class Siteinfo extends CMSPlugin implements SubscriberInterface
 
         $versions = [
             'id'      => 'plg_healthcheck_siteinfo_versions',
+            'section' => Text::_('PLG_HEALTHCHECK_SITEINFO_SECTION'),
             'caption' => $stored ? Text::sprintf('PLG_HEALTHCHECK_SITEINFO_TABLE_VERSIONS_MANUAL', $stored['retrieved']) : Text::_('PLG_HEALTHCHECK_SITEINFO_TABLE_VERSIONS_BUILTIN'),
             'status'  => $this->tableStatus(array_column($rows, 'status')),
             'columns' => [
@@ -186,6 +189,7 @@ final class Siteinfo extends CMSPlugin implements SubscriberInterface
 
         $settingsTable = [
             'id'      => 'plg_healthcheck_siteinfo_settings',
+            'section' => Text::_('PLG_HEALTHCHECK_SITEINFO_SECTION'),
             'caption' => Text::_('PLG_HEALTHCHECK_SITEINFO_TABLE_SETTINGS'),
             'status'  => $this->tableStatus(array_column($settings, 'status')),
             'columns' => [

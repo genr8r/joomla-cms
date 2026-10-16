@@ -108,12 +108,13 @@ final class Ssl extends CMSPlugin implements SubscriberInterface
         $return = base64_encode(Uri::getInstance()->toString());
 
         $icon = [
-            'link'  => 'index.php?option=com_ajax&group=healthcheck&plugin=ssl&format=raw&' . Session::getFormToken() . '=1&return=' . urlencode($return),
-            'icon'  => $open ? 'fas fa-lock-open' : 'fas fa-lock',
-            'name'  => 'PLG_HEALTHCHECK_SSL_ICON_NAME',
-            'text'  => $this->message($result),
-            'title' => $this->title($probe),
-            'id'    => 'plg_healthcheck_ssl',
+            'link'    => 'index.php?option=com_ajax&group=healthcheck&plugin=ssl&format=raw&' . Session::getFormToken() . '=1&return=' . urlencode($return),
+            'icon'    => $open ? 'icon-unlock' : 'icon-lock',
+            'section' => Text::_('PLG_HEALTHCHECK_SSL_SECTION'),
+            'name'    => 'PLG_HEALTHCHECK_SSL_ICON_NAME',
+            'text'    => $this->message($result),
+            'title'   => $this->title($probe),
+            'id'      => 'plg_healthcheck_ssl',
         ];
 
         if ($result['days'] !== null) {
@@ -231,7 +232,7 @@ final class Ssl extends CMSPlugin implements SubscriberInterface
         $custom    = trim(Text::_($customKey));
 
         if ($custom !== '' && $custom !== $customKey) {
-            $text .= '<br>' . $custom;
+            $text .= '<span class="d-block">' . $custom . '</span>';
         }
 
         return $text;

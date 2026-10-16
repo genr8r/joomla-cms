@@ -136,6 +136,7 @@ final class Securityheaders extends CMSPlugin implements SubscriberInterface
 
         $this->append($event, [[
             'id'                      => 'plg_healthcheck_securityheaders_gauge',
+            'section'                 => Text::_('PLG_HEALTHCHECK_SECURITYHEADERS_SECTION'),
             'label'                   => Text::_('PLG_HEALTHCHECK_SECURITYHEADERS_GAUGE_LABEL'),
             'sublabel'                => Text::sprintf('PLG_HEALTHCHECK_SECURITYHEADERS_GAUGE_SUBLABEL', $score['score']),
             'note'                    => Text::sprintf('PLG_HEALTHCHECK_SECURITYHEADERS_CHECKED', $this->date($this->response()['checkedAt'])),
@@ -188,6 +189,7 @@ final class Securityheaders extends CMSPlugin implements SubscriberInterface
 
         $this->append($event, [[
             'id'      => 'plg_healthcheck_securityheaders_table',
+            'section' => Text::_('PLG_HEALTHCHECK_SECURITYHEADERS_SECTION'),
             'caption' => Text::sprintf('PLG_HEALTHCHECK_SECURITYHEADERS_TABLE_CAPTION', $response['url'], $response['status']),
             'status'  => \in_array('error', $statuses, true) ? 'error' : (\in_array('warning', $statuses, true) ? 'warning' : 'success'),
             'columns' => [
@@ -211,8 +213,8 @@ final class Securityheaders extends CMSPlugin implements SubscriberInterface
                         $html = htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8');
 
                         if (($item['link'] ?? '') !== '') {
-                            $html .= '<br><a href="' . htmlspecialchars($item['link'], ENT_QUOTES, 'UTF-8') . '">'
-                                . htmlspecialchars($item['linkLabel'], ENT_QUOTES, 'UTF-8') . '</a>';
+                            $html .= '<div class="mt-1"><a class="btn btn-sm btn-outline-primary" href="' . htmlspecialchars($item['link'], ENT_QUOTES, 'UTF-8') . '">'
+                                . htmlspecialchars($item['linkLabel'], ENT_QUOTES, 'UTF-8') . '</a></div>';
                         }
 
                         return $html;
@@ -244,11 +246,12 @@ final class Securityheaders extends CMSPlugin implements SubscriberInterface
         $reason = rtrim($reason, '. ') . '.';
 
         $this->append($event, [[
-            'link'  => $this->refreshLink(),
-            'icon'  => 'fas fa-shield-halved',
-            'name'  => 'PLG_HEALTHCHECK_SECURITYHEADERS_GAUGE_LABEL',
-            'text'  => Text::_('PLG_HEALTHCHECK_SECURITYHEADERS_UNCHECKED'),
-            'title' => Text::sprintf('PLG_HEALTHCHECK_SECURITYHEADERS_TITLE_REASON', $reason) . ' '
+            'link'    => $this->refreshLink(),
+            'icon'    => 'icon-shield-alt',
+            'section' => Text::_('PLG_HEALTHCHECK_SECURITYHEADERS_SECTION'),
+            'name'    => 'PLG_HEALTHCHECK_SECURITYHEADERS_GAUGE_LABEL',
+            'text'    => Text::_('PLG_HEALTHCHECK_SECURITYHEADERS_UNCHECKED'),
+            'title'   => Text::sprintf('PLG_HEALTHCHECK_SECURITYHEADERS_TITLE_REASON', $reason) . ' '
                 . Text::sprintf('PLG_HEALTHCHECK_SECURITYHEADERS_CHECKED', $this->date($response['checkedAt'])),
             'id' => 'plg_healthcheck_securityheaders',
         ]]);
