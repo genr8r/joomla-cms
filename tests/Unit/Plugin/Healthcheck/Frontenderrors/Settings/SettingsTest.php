@@ -16,8 +16,6 @@ use Joomla\Tests\Unit\UnitTestCase;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\TestDox;
 
-require_once JPATH_ROOT . '/plugins/healthcheck/frontenderrors/src/Settings/Settings.php';
-
 /**
  * Test class for the Frontend Errors settings.
  *

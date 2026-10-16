@@ -17,9 +17,6 @@ use Joomla\Plugin\Healthcheck\Frontenderrors\Extension\Frontenderrors;
 use Joomla\Tests\Unit\UnitTestCase;
 use PHPUnit\Framework\Attributes\TestDox;
 
-require_once JPATH_ROOT . '/plugins/healthcheck/frontenderrors/src/Dashboard/Status.php';
-require_once JPATH_ROOT . '/plugins/healthcheck/frontenderrors/src/Extension/Frontenderrors.php';
-
 /**
  * Test class for the Frontend Errors admin task helpers and the details layout.
  *
@@ -41,6 +38,8 @@ class AdminTasksTest extends UnitTestCase
 
         $language = $this->createStub(Language::class);
         $language->method('_')->willReturnArgument(0);
+        $language->method('getPluralSuffixes')->willReturn(['0']);
+        $language->method('hasKey')->willReturn(false);
         Factory::$language = $language;
 
         HTMLHelper::register('date', static fn ($value): string => 'DATE(' . $value . ')');

@@ -14,8 +14,6 @@ use Joomla\Plugin\Healthcheck\Frontenderrors\Dashboard\Status;
 use Joomla\Tests\Unit\UnitTestCase;
 use PHPUnit\Framework\Attributes\TestDox;
 
-require_once JPATH_ROOT . '/plugins/healthcheck/frontenderrors/src/Dashboard/Status.php';
-
 /**
  * Test class for the dashboard status rules.
  *

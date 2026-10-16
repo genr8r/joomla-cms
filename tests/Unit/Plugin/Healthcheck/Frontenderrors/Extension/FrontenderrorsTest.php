@@ -14,9 +14,6 @@ use Joomla\Plugin\Healthcheck\Frontenderrors\Extension\Frontenderrors;
 use Joomla\Tests\Unit\UnitTestCase;
 use PHPUnit\Framework\Attributes\TestDox;
 
-require_once JPATH_ROOT . '/plugins/healthcheck/frontenderrors/src/Dashboard/Status.php';
-require_once JPATH_ROOT . '/plugins/healthcheck/frontenderrors/src/Extension/Frontenderrors.php';
-
 /**
  * Test class for the Frontend Errors Health Check table helpers.
  *
@@ -31,7 +28,6 @@ class FrontenderrorsTest extends UnitTestCase
     private const LABELS = [
         'page'      => 'Page', 'errors' => 'Errors', 'seen' => 'Seen', 'top' => 'Top error',
         'last_seen' => 'Last seen', 'details' => 'Details', 'new' => 'New', 'regressed' => 'Regressed',
-        'times'     => '%d times',
     ];
 
     private function page(array $over = []): array
@@ -56,6 +52,16 @@ class FrontenderrorsTest extends UnitTestCase
         $this->assertSame('/about', $rows[0]['page']);
         $this->assertSame(12, $rows[0]['hits']);
         $this->assertSame('2026-10-16 10:00:00', $rows[0]['last_seen']);
+    }
+
+    public function testHitsLabelIsPluralised(): void
+    {
+        $label = static fn (int $n): string => $n === 1 ? '1 time' : $n . ' times';
+        $rows  = Frontenderrors::tableRows([$this->page(['hits' => 1]), $this->page(['hits' => 12])], 3, $label);
+        $cols  = array_column(Frontenderrors::columns(self::LABELS, 'https://example.test'), null, 'key');
+
+        $this->assertSame('1 time', $cols['hits']['renderer'](1, $rows[0]));
+        $this->assertSame('12 times', $cols['hits']['renderer'](12, $rows[1]));
     }
 
     public function testTopMessageIsShortened(): void
