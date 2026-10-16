@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS "#__frontenderrors" (
   CONSTRAINT "#__frontenderrors_idx_fingerprint" UNIQUE ("fingerprint")
 );
 
-CREATE INDEX IF NOT EXISTS "#__frontenderrors_idx_state" ON "#__frontenderrors" ("state");
+CREATE INDEX "#__frontenderrors_idx_state" ON "#__frontenderrors" ("state");
 
 CREATE TABLE IF NOT EXISTS "#__frontenderrors_hits" (
   "error_id" integer NOT NULL,
@@ -28,10 +28,9 @@ CREATE TABLE IF NOT EXISTS "#__frontenderrors_hits" (
   PRIMARY KEY ("error_id", "page_hash", "day", "origin")
 );
 
-CREATE INDEX IF NOT EXISTS "#__frontenderrors_hits_idx_day" ON "#__frontenderrors_hits" ("day");
+CREATE INDEX "#__frontenderrors_hits_idx_day" ON "#__frontenderrors_hits" ("day");
 
-CREATE INDEX IF NOT EXISTS "#__frontenderrors_hits_idx_page_hash" ON "#__frontenderrors_hits" ("page_hash");
-
+CREATE INDEX "#__frontenderrors_hits_idx_page_hash" ON "#__frontenderrors_hits" ("page_hash");
 
 INSERT INTO "#__extensions" ("package_id", "name", "type", "element", "folder", "client_id", "enabled", "access", "protected", "locked", "manifest_cache", "params", "custom_data", "ordering", "state")
 SELECT 0, 'plg_healthcheck_frontenderrors', 'plugin', 'frontenderrors', 'healthcheck', 0, 0, 1, 0, 1, '', '{"context":"general"}', '', 0, 0
