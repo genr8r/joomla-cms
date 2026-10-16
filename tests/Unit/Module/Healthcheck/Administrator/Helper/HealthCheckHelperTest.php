@@ -119,15 +119,16 @@ class HealthCheckHelperTest extends UnitTestCase
     public static function gaugeProvider(): array
     {
         return [
-            'explicit error'               => [['status' => 'error', 'score' => 99], 'critical'],
-            'explicit success wins'        => [['status' => 'success', 'score' => 1], 'healthy'],
-            'score below default warning'  => [['score' => 49], 'critical'],
-            'score at default warning'     => [['score' => 50], 'warning'],
-            'score below default success'  => [['score' => 89], 'warning'],
-            'score at default success'     => [['score' => 90], 'healthy'],
-            'custom thresholds'            => [['score' => 75, 'score_threshold_warning' => 50, 'score_threshold_success' => 80], 'warning'],
-            'null thresholds use defaults' => [['score' => 95, 'score_threshold_warning' => null, 'score_threshold_success' => null], 'healthy'],
-            'empty status uses score'      => [['status' => '', 'score' => 10], 'critical'],
+            'explicit error'                                      => [['status' => 'error', 'score' => 99], 'critical'],
+            'explicit success wins'                               => [['status' => 'success', 'score' => 1], 'healthy'],
+            'score below default warning'                         => [['score' => 49], 'critical'],
+            'score at default warning'                            => [['score' => 50], 'warning'],
+            'score below default success'                         => [['score' => 89], 'warning'],
+            'score at default success'                            => [['score' => 90], 'healthy'],
+            'custom thresholds'                                   => [['score' => 75, 'score_threshold_warning' => 50, 'score_threshold_success' => 80], 'warning'],
+            'null thresholds use defaults'                        => [['score' => 95, 'score_threshold_warning' => null, 'score_threshold_success' => null], 'healthy'],
+            'empty status is explicit (healthy, like the layout)' => [['status' => '', 'score' => 10], 'healthy'],
+            'null status uses score'                              => [['status' => null, 'score' => 10], 'critical'],
         ];
     }
 

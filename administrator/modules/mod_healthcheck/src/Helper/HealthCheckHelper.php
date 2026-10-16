@@ -495,7 +495,7 @@ class HealthCheckHelper
      */
     private static function gaugeStatus(array $gauge): string
     {
-        if (isset($gauge['status']) && $gauge['status'] !== '') {
+        if (isset($gauge['status'])) {
             return self::itemStatus($gauge['status']);
         }
 
