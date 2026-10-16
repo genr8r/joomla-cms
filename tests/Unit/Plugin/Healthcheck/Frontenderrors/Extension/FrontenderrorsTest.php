@@ -42,6 +42,11 @@ class FrontenderrorsTest extends UnitTestCase
         ];
     }
 
+    public function testTableShowsTopTenPages(): void
+    {
+        $this->assertSame(10, Frontenderrors::TABLE_LIMIT);
+    }
+
     public function testRowsUseBadgeFromThreshold(): void
     {
         $rows = Frontenderrors::tableRows([$this->page(), $this->page(['errors' => 2])], 3);

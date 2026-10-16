@@ -42,7 +42,7 @@ final class Frontenderrors extends CMSPlugin implements SubscriberInterface
      *
      * @since  __DEPLOY_VERSION__
      */
-    private const TABLE_LIMIT = 25;
+    public const TABLE_LIMIT = 10;
 
     /**
      * Characters of the top error message shown in the table
