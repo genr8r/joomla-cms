@@ -14,8 +14,6 @@ use Joomla\Plugin\Healthcheck\Frontenderrors\Report\NoiseFilter;
 use Joomla\Tests\Unit\UnitTestCase;
 use PHPUnit\Framework\Attributes\TestDox;
 
-require_once JPATH_ROOT . '/plugins/healthcheck/frontenderrors/src/Report/NoiseFilter.php';
-
 /**
  * Test class for the noise filter.
  *

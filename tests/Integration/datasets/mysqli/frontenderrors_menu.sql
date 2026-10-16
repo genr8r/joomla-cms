@@ -15,6 +15,8 @@ CREATE TABLE IF NOT EXISTS `#__menu` (
   `home` tinyint unsigned NOT NULL DEFAULT 0,
   `language` varchar(7) NOT NULL DEFAULT '',
   `client_id` tinyint NOT NULL DEFAULT 0,
+  `publish_up` datetime DEFAULT NULL,
+  `publish_down` datetime DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `idx_left_right` (`lft`, `rgt`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 DEFAULT COLLATE=utf8mb4_unicode_ci;

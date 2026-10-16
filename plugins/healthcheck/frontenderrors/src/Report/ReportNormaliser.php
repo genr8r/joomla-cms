@@ -81,7 +81,7 @@ final class ReportNormaliser
             }
 
             $message = self::cut(self::scrub(self::str($report['message'] ?? '')), self::MAX_MESSAGE);
-            $file    = self::cut(self::normaliseUrl(self::str($report['file'] ?? ''), $origin), self::MAX_FILE);
+            $file    = self::cut(self::scrub(self::normaliseUrl(self::str($report['file'] ?? ''), $origin)), self::MAX_FILE);
             $stack   = self::cut(self::scrub(self::str($report['stack'] ?? '')), self::MAX_STACK);
             $line    = min(self::MAX_POSITION, max(0, (int) ($report['line'] ?? 0)));
             $col     = min(self::MAX_POSITION, max(0, (int) ($report['col'] ?? 0)));

@@ -14,8 +14,6 @@ use Joomla\Plugin\Healthcheck\Frontenderrors\Report\ReportNormaliser;
 use Joomla\Tests\Unit\UnitTestCase;
 use PHPUnit\Framework\Attributes\TestDox;
 
-require_once JPATH_ROOT . '/plugins/healthcheck/frontenderrors/src/Report/ReportNormaliser.php';
-
 /**
  * Test class for the report normaliser.
  *
@@ -149,6 +147,14 @@ class ReportNormaliserTest extends UnitTestCase
         $r = self::report();
         unset($r['count']);
         $this->assertSame(1, self::norm([$r])[0]['count']);
+    }
+
+    public function testFileIsScrubbed(): void
+    {
+        $out = self::norm([self::report(['file' => 'https://example.test/joomla/u/jane@example.com/app.js'])]);
+
+        $this->assertStringContainsString('[redacted]', $out[0]['file']);
+        $this->assertStringNotContainsString('jane@example.com', $out[0]['file']);
     }
 
     public function testScrub(): void

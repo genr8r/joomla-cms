@@ -17,10 +17,6 @@ use Joomla\Tests\Integration\DBTestInterface;
 use Joomla\Tests\Integration\DBTestTrait;
 use Joomla\Tests\Integration\IntegrationTestCase;
 
-require_once JPATH_ROOT . '/plugins/healthcheck/frontenderrors/src/Report/ReportNormaliser.php';
-require_once JPATH_ROOT . '/plugins/healthcheck/frontenderrors/src/Report/SourceResolver.php';
-require_once JPATH_ROOT . '/plugins/healthcheck/frontenderrors/src/Model/ErrorRepository.php';
-
 /**
  * Test class for the Frontend Errors repository (runs on MySQL/MariaDB and PostgreSQL).
  *
@@ -85,7 +81,7 @@ class ErrorRepositoryTest extends IntegrationTestCase implements DBTestInterface
     {
         $db = $this->getDBDriver();
         $fp = $this->report($message)['fingerprint'];
-        $q  = $db->getQuery(true)
+        $q  = $db->createQuery()
             ->select($db->quoteName('id'))
             ->from($db->quoteName('#__frontenderrors'))
             ->where($db->quoteName('fingerprint') . ' = :fp')
@@ -104,7 +100,7 @@ class ErrorRepositoryTest extends IntegrationTestCase implements DBTestInterface
     private function row(int $id): object
     {
         $db = $this->getDBDriver();
-        $q  = $db->getQuery(true)
+        $q  = $db->createQuery()
             ->select('*')
             ->from($db->quoteName('#__frontenderrors'))
             ->where($db->quoteName('id') . ' = :id')
@@ -120,7 +116,7 @@ class ErrorRepositoryTest extends IntegrationTestCase implements DBTestInterface
     {
         $db   = $this->getDBDriver();
         $type = 'error';
-        $q    = $db->getQuery(true)
+        $q    = $db->createQuery()
             ->insert($db->quoteName('#__frontenderrors'))
             ->columns($db->quoteName(['fingerprint', 'type', 'stack', 'first_seen', 'last_seen', 'state', 'state_changed']))
             ->values(':fp, :type, :stack, :fs, :ls, :st, :sc')
@@ -142,7 +138,7 @@ class ErrorRepositoryTest extends IntegrationTestCase implements DBTestInterface
         $hash = sha1($page);
         $o    = 'visitor';
         $n    = 1;
-        $q    = $db->getQuery(true)
+        $q    = $db->createQuery()
             ->insert($db->quoteName('#__frontenderrors_hits'))
             ->columns($db->quoteName(['error_id', 'page', 'page_hash', 'day', 'origin', 'hits']))
             ->values(':id, :page, :hash, :day, :o, :n')
@@ -263,11 +259,26 @@ class ErrorRepositoryTest extends IntegrationTestCase implements DBTestInterface
         $this->assertSame([52, 5, 1000], array_column($top, 'hits'));
         $this->assertSame('only', $top[2]['top_message']);
         $this->assertSame('e1', $top[0]['top_message']);
-        $this->assertSame('2026-10-16 10:00:00', $top[0]['last_seen']);
+        $this->assertSame('2026-10-16', $top[0]['last_seen']);
         $this->assertTrue($top[0]['has_new']);
         $this->assertFalse($top[0]['has_regressed']);
 
         $this->assertCount(1, $this->repo->topPages('2026-10-16', '2026-10-16', 1));
+    }
+
+    public function testLastSeenIsPerPageAndInRange(): void
+    {
+        $this->repo->record([$this->report('A', '/a')], 'visitor', '2026-10-12 10:00:00');
+        $this->repo->record([$this->report('A', '/b')], 'visitor', '2026-10-16 10:00:00');
+
+        $byPage = array_column($this->repo->topPages('2026-10-10', '2026-10-16', 10), 'last_seen', 'page');
+
+        $this->assertSame('2026-10-12', $byPage['/a']);
+        $this->assertSame('2026-10-16', $byPage['/b']);
+
+        $inRange = array_column($this->repo->topPages('2026-10-10', '2026-10-13', 10), 'last_seen', 'page');
+
+        $this->assertSame(['/a' => '2026-10-12'], $inRange);
     }
 
     public function testHasNewFalseForOlderErrors(): void

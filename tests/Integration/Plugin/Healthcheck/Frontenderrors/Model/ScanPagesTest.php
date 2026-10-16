@@ -15,8 +15,6 @@ use Joomla\Tests\Integration\DBTestInterface;
 use Joomla\Tests\Integration\DBTestTrait;
 use Joomla\Tests\Integration\IntegrationTestCase;
 
-require_once JPATH_ROOT . '/plugins/healthcheck/frontenderrors/src/Model/ScanPages.php';
-
 /**
  * Test class for the Frontend Errors scan page list (runs on MySQL/MariaDB and PostgreSQL).
  *
@@ -33,6 +31,8 @@ class ScanPagesTest extends IntegrationTestCase implements DBTestInterface
      * Guest view levels used by the tests: Public (1) and Guest (5).
      */
     private const GUEST_LEVELS = [1, 5];
+
+    private const NOW = '2026-10-16 12:00:00';
 
     private int $lft = 0;
 
@@ -102,8 +102,11 @@ class ScanPagesTest extends IntegrationTestCase implements DBTestInterface
         $this->item('url', ['type' => 'url', 'link' => 'https://example.org/']);
         $this->item('alias', ['type' => 'alias', 'link' => 'index.php?Itemid=']);
         $this->item('admin', ['client_id' => 1, 'menutype' => 'main']);
+        $this->item('expired', ['publish_down' => '2026-10-01 00:00:00']);
+        $this->item('scheduled', ['publish_up' => '2026-11-01 00:00:00']);
+        $window = $this->item('in-window', ['publish_up' => '2026-10-01 00:00:00', 'publish_down' => '2026-11-01 00:00:00']);
 
-        $this->assertSame([$article, $guest], (new ScanPages($this->getDBDriver()))->itemIds(25, self::GUEST_LEVELS));
+        $this->assertSame([$article, $guest, $window], (new ScanPages($this->getDBDriver()))->itemIds(25, self::GUEST_LEVELS, self::NOW));
     }
 
     /**
@@ -123,7 +126,7 @@ class ScanPagesTest extends IntegrationTestCase implements DBTestInterface
 
         // Move the first item to the end of the tree: order is lft, not id.
         $db    = $this->getDBDriver();
-        $query = $db->getQuery(true)
+        $query = $db->createQuery()
             ->update($db->quoteName('#__menu'))
             ->set($db->quoteName('lft') . ' = 1000')
             ->set($db->quoteName('rgt') . ' = 1001')
@@ -132,7 +135,7 @@ class ScanPagesTest extends IntegrationTestCase implements DBTestInterface
 
         $expected = \array_slice(array_merge(\array_slice($ids, 1), [$ids[0]]), 0, 25);
 
-        $this->assertSame($expected, (new ScanPages($db))->itemIds(25, self::GUEST_LEVELS));
+        $this->assertSame($expected, (new ScanPages($db))->itemIds(25, self::GUEST_LEVELS, self::NOW));
     }
 
     /**
@@ -148,7 +151,7 @@ class ScanPagesTest extends IntegrationTestCase implements DBTestInterface
 
         $scan = new ScanPages($this->getDBDriver());
 
-        $this->assertSame([], $scan->itemIds(25, []));
-        $this->assertSame([], $scan->itemIds(0, self::GUEST_LEVELS));
+        $this->assertSame([], $scan->itemIds(25, [], self::NOW));
+        $this->assertSame([], $scan->itemIds(0, self::GUEST_LEVELS, self::NOW));
     }
 }

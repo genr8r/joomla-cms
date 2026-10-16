@@ -41,12 +41,13 @@ final class ScanPages
      *
      * @param   integer    $limit       Maximum number of items
      * @param   integer[]  $viewLevels  View levels allowed to see the item (a guest's levels)
+     * @param   string     $now         Current UTC time, `Y-m-d H:i:s`, for the publish window
      *
      * @return  integer[]  Menu item ids
      *
      * @since   __DEPLOY_VERSION__
      */
-    public function itemIds(int $limit, array $viewLevels): array
+    public function itemIds(int $limit, array $viewLevels, string $now): array
     {
         $viewLevels = array_values(array_unique(array_map('intval', $viewLevels)));
 
@@ -59,19 +60,23 @@ final class ScanPages
         $published = 1;
         $home      = 0;
         $type      = 'component';
-        $query     = $db->getQuery(true)
+        $query     = $db->createQuery()
             ->select($db->quoteName('id'))
             ->from($db->quoteName('#__menu'))
             ->where($db->quoteName('client_id') . ' = :client')
             ->where($db->quoteName('published') . ' = :published')
             ->where($db->quoteName('type') . ' = :type')
             ->where($db->quoteName('home') . ' = :home')
+            ->where('(' . $db->quoteName('publish_up') . ' IS NULL OR ' . $db->quoteName('publish_up') . ' <= :nowUp)')
+            ->where('(' . $db->quoteName('publish_down') . ' IS NULL OR ' . $db->quoteName('publish_down') . ' >= :nowDown)')
             ->whereIn($db->quoteName('access'), $viewLevels)
             ->order([$db->quoteName('lft') . ' ASC', $db->quoteName('id') . ' ASC'])
             ->bind(':client', $client, ParameterType::INTEGER)
             ->bind(':published', $published, ParameterType::INTEGER)
             ->bind(':type', $type)
             ->bind(':home', $home, ParameterType::INTEGER)
+            ->bind(':nowUp', $now)
+            ->bind(':nowDown', $now)
             ->setLimit($limit);
 
         return array_map('intval', $db->setQuery($query)->loadColumn());

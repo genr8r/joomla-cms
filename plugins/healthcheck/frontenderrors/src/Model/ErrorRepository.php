@@ -116,7 +116,7 @@ class ErrorRepository
         $db         = $this->db;
         $open       = self::STATE_OPEN;
         $regressed  = self::STATE_REGRESSED;
-        $query      = $db->getQuery(true)
+        $query      = $db->createQuery()
             ->select(
                 [
                     'COUNT(DISTINCT ' . $db->quoteName('e.id') . ') AS ' . $db->quoteName('n_errors'),
@@ -162,14 +162,14 @@ class ErrorRepository
         $regressed  = self::STATE_REGRESSED;
         $fromStart  = $fromDay . ' 00:00:00';
         $limit      = max(1, $limit);
-        $query      = $db->getQuery(true)
+        $query      = $db->createQuery()
             ->select(
                 [
                     $db->quoteName('h.page_hash', 'page_hash'),
                     $db->quoteName('h.page', 'page'),
                     'COUNT(DISTINCT ' . $db->quoteName('e.id') . ') AS ' . $db->quoteName('n_errors'),
                     'SUM(' . $db->quoteName('h.hits') . ') AS ' . $db->quoteName('n_hits'),
-                    'MAX(' . $db->quoteName('e.last_seen') . ') AS ' . $db->quoteName('max_seen'),
+                    'MAX(' . $db->quoteName('h.day') . ') AS ' . $db->quoteName('last_day'),
                     'MAX(CASE WHEN ' . $db->quoteName('e.first_seen') . ' >= :fromStart THEN 1 ELSE 0 END) AS ' . $db->quoteName('is_new'),
                     'MAX(CASE WHEN ' . $db->quoteName('e.state') . ' = :regressed THEN 1 ELSE 0 END) AS ' . $db->quoteName('is_regressed'),
                 ]
@@ -180,7 +180,7 @@ class ErrorRepository
             ->where($db->quoteName('h.day') . ' >= :fromDay')
             ->where($db->quoteName('h.day') . ' <= :toDay')
             ->group([$db->quoteName('h.page_hash'), $db->quoteName('h.page')])
-            ->order([$db->quoteName('n_errors') . ' DESC', $db->quoteName('n_hits') . ' DESC', $db->quoteName('max_seen') . ' DESC'])
+            ->order([$db->quoteName('n_errors') . ' DESC', $db->quoteName('n_hits') . ' DESC', $db->quoteName('last_day') . ' DESC'])
             ->bind(':fromStart', $fromStart)
             ->bind(':regressed', $regressed, ParameterType::INTEGER)
             ->bind(':open', $open, ParameterType::INTEGER)
@@ -197,7 +197,7 @@ class ErrorRepository
                 'errors'        => (int) $row->n_errors,
                 'hits'          => (int) $row->n_hits,
                 'top_message'   => $this->topMessage((string) $row->page_hash, $fromDay, $toDay),
-                'last_seen'     => (string) $row->max_seen,
+                'last_seen'     => (string) $row->last_day,
                 'has_new'       => (int) $row->is_new > 0,
                 'has_regressed' => (int) $row->is_regressed > 0,
             ];
@@ -222,7 +222,7 @@ class ErrorRepository
         $db      = $this->db;
         $hash    = sha1($page);
         $ignored = self::STATE_IGNORED;
-        $query   = $db->getQuery(true)
+        $query   = $db->createQuery()
             ->select(
                 [
                     $db->quoteName('e.id'),
@@ -315,7 +315,7 @@ class ErrorRepository
         }
 
         $db    = $this->db;
-        $check = $db->getQuery(true)
+        $check = $db->createQuery()
             ->select($db->quoteName('id'))
             ->from($db->quoteName(self::TABLE_ERRORS))
             ->where($db->quoteName('id') . ' = :id')
@@ -325,7 +325,7 @@ class ErrorRepository
             return false;
         }
 
-        $query = $db->getQuery(true)
+        $query = $db->createQuery()
             ->update($db->quoteName(self::TABLE_ERRORS))
             ->set($db->quoteName('state') . ' = :state')
             ->set($db->quoteName('state_changed') . ' = :now')
@@ -356,7 +356,7 @@ class ErrorRepository
     {
         $db = $this->db;
 
-        $query = $db->getQuery(true)
+        $query = $db->createQuery()
             ->delete($db->quoteName(self::TABLE_HITS))
             ->where($db->quoteName('day') . ' < :cutoff')
             ->bind(':cutoff', $cutoffDay);
@@ -369,7 +369,7 @@ class ErrorRepository
         $resolved    = self::STATE_RESOLVED;
         $noHits      = $db->quoteName('id') . ' NOT IN (SELECT ' . $db->quoteName('error_id') . ' FROM ' . $db->quoteName(self::TABLE_HITS) . ')';
 
-        $query = $db->getQuery(true)
+        $query = $db->createQuery()
             ->delete($db->quoteName(self::TABLE_ERRORS))
             ->where($noHits)
             ->where($db->quoteName('first_seen') . ' < :recent')
@@ -409,7 +409,7 @@ class ErrorRepository
     protected function findErrorId(string $fingerprint): ?int
     {
         $db    = $this->db;
-        $query = $db->getQuery(true)
+        $query = $db->createQuery()
             ->select($db->quoteName('id'))
             ->from($db->quoteName(self::TABLE_ERRORS))
             ->where($db->quoteName('fingerprint') . ' = :fp')
@@ -507,7 +507,7 @@ class ErrorRepository
         $col       = max(0, min(4294967295, (int) $report['col']));
         $stack     = (string) $report['stack'];
         $state     = self::STATE_OPEN;
-        $query     = $db->getQuery(true)
+        $query     = $db->createQuery()
             ->insert($db->quoteName(self::TABLE_ERRORS))
             ->columns(
                 $db->quoteName(['fingerprint', 'type', 'message', 'file', 'line', 'col', 'stack', 'source_extension', 'first_seen', 'last_seen', 'state'])
@@ -547,7 +547,7 @@ class ErrorRepository
         $regressed = self::STATE_REGRESSED;
         $threshold = $this->shift($now, -self::GRACE_SECONDS);
 
-        $query = $db->getQuery(true)
+        $query = $db->createQuery()
             ->update($db->quoteName(self::TABLE_ERRORS))
             ->set($db->quoteName('state') . ' = :regressed')
             ->set($db->quoteName('state_changed') . ' = :now')
@@ -561,7 +561,7 @@ class ErrorRepository
             ->bind(':threshold', $threshold);
         $db->setQuery($query)->execute();
 
-        $query = $db->getQuery(true)
+        $query = $db->createQuery()
             ->update($db->quoteName(self::TABLE_ERRORS))
             ->set($db->quoteName('last_seen') . ' = :now')
             ->where($db->quoteName('id') . ' = :id')
@@ -595,7 +595,7 @@ class ErrorRepository
 
         $db    = $this->db;
         $hash  = sha1($page);
-        $query = $db->getQuery(true)
+        $query = $db->createQuery()
             ->insert($db->quoteName(self::TABLE_HITS))
             ->columns($db->quoteName(['error_id', 'page', 'page_hash', 'day', 'origin', 'hits']))
             ->values(':id, :page, :hash, :day, :origin, :count')
@@ -633,7 +633,7 @@ class ErrorRepository
     {
         $db    = $this->db;
         $hash  = sha1($page);
-        $query = $db->getQuery(true)
+        $query = $db->createQuery()
             ->update($db->quoteName(self::TABLE_HITS))
             ->set($db->quoteName('hits') . ' = ' . $db->quoteName('hits') . ' + :count')
             ->where($db->quoteName('error_id') . ' = :id')
@@ -659,7 +659,7 @@ class ErrorRepository
     {
         $db      = $this->db;
         $ignored = self::STATE_IGNORED;
-        $query   = $db->getQuery(true)
+        $query   = $db->createQuery()
             ->select('COUNT(*)')
             ->from($db->quoteName(self::TABLE_ERRORS))
             ->where($db->quoteName('state') . ' <> :ignored')
@@ -676,7 +676,7 @@ class ErrorRepository
     private function hitCount(): int
     {
         $db    = $this->db;
-        $query = $db->getQuery(true)
+        $query = $db->createQuery()
             ->select('COUNT(*)')
             ->from($db->quoteName(self::TABLE_HITS));
 
@@ -699,7 +699,7 @@ class ErrorRepository
         $db        = $this->db;
         $open      = self::STATE_OPEN;
         $regressed = self::STATE_REGRESSED;
-        $query     = $db->getQuery(true)
+        $query     = $db->createQuery()
             ->select($db->quoteName('e.message'))
             ->from($db->quoteName(self::TABLE_HITS, 'h'))
             ->join('INNER', $db->quoteName(self::TABLE_ERRORS, 'e'), $db->quoteName('e.id') . ' = ' . $db->quoteName('h.error_id'))
@@ -733,7 +733,7 @@ class ErrorRepository
     private function origins(array $ids, string $hash, string $fromDay, string $toDay): array
     {
         $db    = $this->db;
-        $query = $db->getQuery(true)
+        $query = $db->createQuery()
             ->select([$db->quoteName('error_id'), $db->quoteName('origin')])
             ->from($db->quoteName(self::TABLE_HITS))
             ->whereIn($db->quoteName('error_id'), $ids)

@@ -15,6 +15,8 @@ CREATE TABLE IF NOT EXISTS "#__menu" (
   "home" smallint NOT NULL DEFAULT 0,
   "language" varchar(7) NOT NULL DEFAULT '',
   "client_id" smallint NOT NULL DEFAULT 0,
+  "publish_up" timestamp without time zone DEFAULT NULL,
+  "publish_down" timestamp without time zone DEFAULT NULL,
   PRIMARY KEY ("id")
 );
 

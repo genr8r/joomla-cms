@@ -252,7 +252,6 @@ final class Frontenderrors extends CMSPlugin implements SubscriberInterface
             'details'   => Text::_('PLG_HEALTHCHECK_FRONTENDERRORS_COLUMN_DETAILS'),
             'new'       => Text::_('PLG_HEALTHCHECK_FRONTENDERRORS_BADGE_NEW'),
             'regressed' => Text::_('PLG_HEALTHCHECK_FRONTENDERRORS_BADGE_REGRESSED'),
-            'times'     => Text::_('PLG_HEALTHCHECK_FRONTENDERRORS_SEEN'),
         ];
 
         $this->append($event, [[
@@ -261,7 +260,11 @@ final class Frontenderrors extends CMSPlugin implements SubscriberInterface
             'caption' => Text::sprintf('PLG_HEALTHCHECK_FRONTENDERRORS_TABLE_CAPTION', $settings->periodDays),
             'status'  => $this->tileStatus(),
             'columns' => self::columns($labels, $this->origin()),
-            'data'    => self::tableRows($data['pages'], $settings->thresholdPage),
+            'data'    => self::tableRows(
+                $data['pages'],
+                $settings->thresholdPage,
+                static fn (int $count): string => Text::plural('PLG_HEALTHCHECK_FRONTENDERRORS_N_TIMES', $count)
+            ),
         ]]);
     }
 
@@ -396,8 +399,9 @@ final class Frontenderrors extends CMSPlugin implements SubscriberInterface
      *
      * @since   __DEPLOY_VERSION__
      */
-    public static function tableRows(array $topPages, int $threshold): array
+    public static function tableRows(array $topPages, int $threshold, ?callable $timesLabel = null): array
     {
+        $timesLabel ??= static fn (int $count): string => (string) $count;
         $rows = [];
 
         foreach ($topPages as $page) {
@@ -408,6 +412,7 @@ final class Frontenderrors extends CMSPlugin implements SubscriberInterface
                 'errors'    => (int) $page['errors'],
                 'badge'     => Status::badge((int) $page['errors'], $threshold),
                 'hits'      => (int) $page['hits'],
+                'hits_text' => (string) $timesLabel((int) $page['hits']),
                 'top'       => mb_strlen($message) > self::MESSAGE_LENGTH ? mb_substr($message, 0, self::MESSAGE_LENGTH - 1) . '…' : $message,
                 'marker'    => !empty($page['has_regressed']) ? 'regressed' : (!empty($page['has_new']) ? 'new' : ''),
                 'last_seen' => (string) $page['last_seen'],
@@ -420,7 +425,7 @@ final class Frontenderrors extends CMSPlugin implements SubscriberInterface
     /**
      * Table columns. Browser-sourced values are escaped in every custom renderer.
      *
-     * @param   array   $labels  Translated labels: page, errors, seen, top, last_seen, details, new, regressed, times
+     * @param   array   $labels  Translated labels: page, errors, seen, top, last_seen, details, new, regressed
      * @param   string  $origin  Scheme, host and port of the site, no trailing slash
      *
      * @return  array
@@ -454,7 +459,7 @@ final class Frontenderrors extends CMSPlugin implements SubscriberInterface
                 'key'      => 'hits',
                 'title'    => $labels['seen'],
                 'type'     => 'custom',
-                'renderer' => static fn ($value): string => $escape(\sprintf($labels['times'], (int) $value)),
+                'renderer' => static fn ($value, $item): string => $escape($item['hits_text'] ?? $value),
             ],
             [
                 'key'      => 'top',
@@ -496,7 +501,7 @@ final class Frontenderrors extends CMSPlugin implements SubscriberInterface
     {
         $paths = [];
 
-        foreach ($this->scanPages->itemIds($limit, Access::getAuthorisedViewLevels(0)) as $id) {
+        foreach ($this->scanPages->itemIds($limit, Access::getAuthorisedViewLevels(0), gmdate('Y-m-d H:i:s')) as $id) {
             try {
                 $paths[] = Route::link('site', 'index.php?Itemid=' . $id, false);
             } catch (\Throwable $e) {
@@ -740,10 +745,10 @@ final class Frontenderrors extends CMSPlugin implements SubscriberInterface
 
             $id = (int) $db->setQuery($query)->loadResult();
         } catch (\Throwable $e) {
-            return '';
+            return '#';
         }
 
-        return $id > 0 ? 'index.php?option=com_plugins&task=plugin.edit&extension_id=' . $id : '';
+        return $id > 0 ? 'index.php?option=com_plugins&task=plugin.edit&extension_id=' . $id : '#';
     }
 
     /**

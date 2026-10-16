@@ -49,7 +49,7 @@ final class NoiseFilter
             }
         }
 
-        if ($file === '' && \in_array(rtrim($message, '.'), ['Script error'], true)) {
+        if ($file === '' && rtrim($message, '.') === 'Script error') {
             return false;
         }
 
