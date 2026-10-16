@@ -149,4 +149,19 @@ class HealthCheckHelperTest extends UnitTestCase
         $this->assertSame($expected, $summary['worst']);
         $this->assertSame(1, $summary['counts'][$expected]);
     }
+
+    /**
+     * @return  void
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    #[TestDox('returns a distinct accordion id on every call')]
+    public function testAccordionIdIsUnique(): void
+    {
+        $first  = HealthCheckHelper::accordionId(5);
+        $second = HealthCheckHelper::accordionId(5);
+
+        $this->assertNotSame($first, $second);
+        $this->assertStringStartsWith('healthcheck-sections-5-', $first);
+    }
 }

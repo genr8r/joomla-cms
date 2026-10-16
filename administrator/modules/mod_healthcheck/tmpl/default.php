@@ -36,27 +36,45 @@ Text::script('JCLOSE');
 $leading_html = HTMLHelper::_('healthchecks.leadings', $leading);
 $footer_html  = HTMLHelper::_('healthchecks.footers', $footer);
 
-// One panel per plugin section; panels whose items all render empty (e.g. no access) are skipped.
+// One panel per plugin section. Each item is rendered once; items the user cannot access render as ''
+// and are left out of both the body and the header summary. Panels with nothing left are skipped.
 $panels = [];
+$types  = ['gauges' => ['gauge', 'nav'], 'buttons' => ['button', 'nav'], 'lists' => ['list', 'mt-3'], 'tables' => ['table', 'div']];
 
 foreach (HealthCheckHelper::groupBySection($gauges, $buttons, $lists, $tables, Text::_('MOD_HEALTHCHECK_SECTION_OTHER')) as $section) {
+    $kept = ['title' => $section['title'], 'gauges' => [], 'buttons' => [], 'lists' => [], 'tables' => []];
     $body = '';
-    $html = HTMLHelper::_('healthchecks.gauges', $section['gauges']);
-    $body .= $html ? '<ul class="nav flex-wrap">' . $html . '</ul>' : '';
-    $html = HTMLHelper::_('healthchecks.buttons', $section['buttons']);
-    $body .= $html ? '<ul class="nav flex-wrap">' . $html . '</ul>' : '';
-    $html = HTMLHelper::_('healthchecks.lists', $section['lists']);
-    $body .= $html ? '<ul class="mt-3">' . $html . '</ul>' : '';
-    $html = HTMLHelper::_('healthchecks.tables', $section['tables']);
-    $body .= $html ? '<div class="mt-3">' . $html . '</div>' : '';
+
+    foreach ($types as $type => [$helper, $wrapper]) {
+        $html = '';
+
+        foreach ($section[$type] as $item) {
+            $itemHtml = HTMLHelper::_('healthchecks.' . $helper, $item);
+
+            if ($itemHtml !== '') {
+                $kept[$type][] = $item;
+                $html         .= $itemHtml;
+            }
+        }
+
+        if ($html === '') {
+            continue;
+        }
+
+        $body .= match ($wrapper) {
+            'nav'   => '<ul class="nav flex-wrap">' . $html . '</ul>',
+            'div'   => '<div class="mt-3">' . $html . '</div>',
+            default => '<ul class="mt-3">' . $html . '</ul>',
+        };
+    }
 
     if ($body !== '') {
-        $panels[] = ['section' => $section, 'body' => $body];
+        $panels[] = ['section' => $kept, 'body' => $body];
     }
 }
 
 $has_data    = $panels !== [];
-$accordionId = 'healthcheck-sections-' . (int) $module->id;
+$accordionId = HealthCheckHelper::accordionId((int) $module->id);
 ?>
 <?php if ($has_data) : ?>
     <!-- Filter Buttons -->

@@ -467,6 +467,22 @@ class HealthCheckHelper
     }
 
     /**
+     * Accordion id that is unique for every call in this request, so a module rendered twice never repeats an id.
+     *
+     * @param   int  $moduleId  The module id
+     *
+     * @return  string
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    public static function accordionId(int $moduleId): string
+    {
+        static $counter = 0;
+
+        return 'healthcheck-sections-' . $moduleId . '-' . (++$counter);
+    }
+
+    /**
      * Map an item status the way the icon, list and table layouts do.
      *
      * @param   mixed  $status  The item's status

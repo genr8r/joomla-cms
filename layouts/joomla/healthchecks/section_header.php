@@ -27,14 +27,18 @@ $labels  = ['critical' => 'MOD_HEALTHCHECK_FILTER_CRITICAL', 'warning' => 'MOD_H
 $worst   = isset($icons[$worst]) ? $worst : 'healthy';
 ?>
 <span class="d-flex align-items-center flex-grow-1 me-3">
-    <span class="<?php echo $icons[$worst]; ?> me-2" aria-hidden="true"></span>
-    <span class="visually-hidden"><?php echo Text::_($labels[$worst]); ?>: </span>
+    <span class="<?php echo $icons[$worst]; ?> me-2" data-healthcheck-worst-icon aria-hidden="true"></span>
+    <span class="visually-hidden"><span data-healthcheck-worst-text><?php echo Text::_($labels[$worst]); ?></span>: </span>
     <span class="fw-bold"><?php echo htmlspecialchars($title, ENT_QUOTES, 'UTF-8'); ?></span>
-    <span class="ms-auto text-nowrap">
-        <?php foreach (['critical', 'warning', 'healthy'] as $status) : ?>
-            <?php if (!empty($counts[$status])) : ?>
-                <span class="badge <?php echo $badges[$status]; ?> ms-1"><?php echo Text::sprintf('MOD_HEALTHCHECK_SECTION_COUNT_' . strtoupper($status), (int) $counts[$status]); ?></span>
-            <?php endif; ?>
+    <span class="ms-auto d-flex flex-wrap justify-content-end gap-1"
+        <?php foreach ($badges as $status => $class) : ?>
+            data-healthcheck-label-<?php echo $status; ?>="<?php echo htmlspecialchars(Text::_('MOD_HEALTHCHECK_SECTION_COUNT_' . strtoupper($status)), ENT_QUOTES, 'UTF-8'); ?>"
+            data-healthcheck-word-<?php echo $status; ?>="<?php echo htmlspecialchars(Text::_($labels[$status]), ENT_QUOTES, 'UTF-8'); ?>"
+        <?php endforeach; ?>
+    >
+        <?php foreach ($badges as $status => $class) : ?>
+            <?php $count = (int) ($counts[$status] ?? 0); ?>
+            <span class="badge <?php echo $class; ?><?php echo $count > 0 ? '' : ' d-none'; ?>" data-healthcheck-count="<?php echo $status; ?>"><?php echo Text::sprintf('MOD_HEALTHCHECK_SECTION_COUNT_' . strtoupper($status), $count); ?></span>
         <?php endforeach; ?>
     </span>
 </span>
