@@ -56,6 +56,33 @@
       const moduleRoot = filterBar.parentElement || document;
       const healthCheckItems = moduleRoot.querySelectorAll('[data-healthcheck-status]');
 
+      const sections = moduleRoot.querySelectorAll('.healthcheck-section');
+
+      function setSectionOpen(section, open) {
+        const panel = section.querySelector('.accordion-collapse');
+        const toggle = section.querySelector('.accordion-button');
+
+        if (!panel || !toggle) {
+          return;
+        }
+
+        panel.classList.toggle('show', open);
+        toggle.classList.toggle('collapsed', !open);
+        toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+      }
+
+      function updateSections(normalizedFilter) {
+        sections.forEach((section) => {
+          const items = [...section.querySelectorAll('[data-healthcheck-status]')];
+          const hasVisible = items.some((item) => !item.hidden);
+          const show = normalizedFilter === 'all' || hasVisible;
+
+          section.hidden = !show;
+          section.classList.toggle('d-none', !show);
+          setSectionOpen(section, normalizedFilter !== 'all' && hasVisible);
+        });
+      }
+
       if (filterButtons.length === 0 || healthCheckItems.length === 0) {
         return;
       }
@@ -76,6 +103,8 @@
 
           setItemVisibility(item, shouldShow);
         });
+
+        updateSections(normalizedFilter);
       }
 
       filterBar.addEventListener('click', (event) => {

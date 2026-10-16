@@ -13,6 +13,7 @@ defined('_JEXEC') or die;
 use Joomla\CMS\HTML\HTMLHelper;
 use Joomla\CMS\Language\Text;
 use Joomla\CMS\Layout\LayoutHelper;
+use Joomla\Module\Healthcheck\Administrator\Helper\HealthCheckHelper;
 
 /** @var Joomla\CMS\WebAsset\WebAssetManager $wa */
 $wa = $app->getDocument()->getWebAssetManager();
@@ -32,14 +33,30 @@ $wa->registerAndUseScript('mod_healthcheck.filter', 'mod_healthcheck/healthcheck
 // Label for the close button of the code modal opened by the async script.
 Text::script('JCLOSE');
 
-$gauges_html  = HTMLHelper::_('healthchecks.gauges', $gauges);
-$buttons_html = HTMLHelper::_('healthchecks.buttons', $buttons);
-$lists_html   = HTMLHelper::_('healthchecks.lists', $lists);
-$tables_html  = HTMLHelper::_('healthchecks.tables', $tables);
 $leading_html = HTMLHelper::_('healthchecks.leadings', $leading);
 $footer_html  = HTMLHelper::_('healthchecks.footers', $footer);
 
-$has_data = !empty($gauges_html) || !empty($buttons_html) || !empty($lists_html) || !empty($tables_html);
+// One panel per plugin section; panels whose items all render empty (e.g. no access) are skipped.
+$panels = [];
+
+foreach (HealthCheckHelper::groupBySection($gauges, $buttons, $lists, $tables, Text::_('MOD_HEALTHCHECK_SECTION_OTHER')) as $section) {
+    $body = '';
+    $html = HTMLHelper::_('healthchecks.gauges', $section['gauges']);
+    $body .= $html ? '<ul class="nav flex-wrap">' . $html . '</ul>' : '';
+    $html = HTMLHelper::_('healthchecks.buttons', $section['buttons']);
+    $body .= $html ? '<ul class="nav flex-wrap">' . $html . '</ul>' : '';
+    $html = HTMLHelper::_('healthchecks.lists', $section['lists']);
+    $body .= $html ? '<ul class="mt-3">' . $html . '</ul>' : '';
+    $html = HTMLHelper::_('healthchecks.tables', $section['tables']);
+    $body .= $html ? '<div class="mt-3">' . $html . '</div>' : '';
+
+    if ($body !== '') {
+        $panels[] = ['section' => $section, 'body' => $body];
+    }
+}
+
+$has_data    = $panels !== [];
+$accordionId = 'healthcheck-sections-' . (int) $module->id;
 ?>
 <?php if ($has_data) : ?>
     <!-- Filter Buttons -->
@@ -71,33 +88,19 @@ $has_data = !empty($gauges_html) || !empty($buttons_html) || !empty($lists_html)
 <?php endif; ?>
 <nav class="quick-icons health-checks px-3 pb-3" aria-label="<?php echo Text::_('MOD_HEALTHCHECK_NAV_LABEL') . ' ' . htmlspecialchars($module->title, ENT_QUOTES, 'UTF-8'); ?>">
     <?php if ($has_data) : ?>
-        <!-- show gauges -->
-        <?php if (!empty($gauges_html)) : ?>
-            <ul class="nav flex-wrap">
-                <?php echo $gauges_html; ?>
-            </ul>
-        <?php endif; ?>
-
-        <!-- show buttons (icons) -->
-        <?php if (!empty($buttons_html)) : ?>
-            <ul class="nav flex-wrap">
-                <?php echo $buttons_html; ?>
-            </ul>
-        <?php endif; ?>
-
-        <!-- show lists -->
-        <?php if (!empty($lists_html)) : ?>
-            <ul class="mt-3">
-                <?php echo $lists_html; ?>
-            </ul>
-        <?php endif; ?>
-
-        <!-- show tabular data -->
-        <?php if (!empty($tables_html)) : ?>
-            <div class="mt-3">
-                <?php echo $tables_html; ?>
-            </div>
-        <?php endif; ?>
+        <?php echo HTMLHelper::_('bootstrap.startAccordion', $accordionId, ['parent' => false]); ?>
+        <?php foreach ($panels as $index => $panel) : ?>
+            <?php echo HTMLHelper::_(
+                'bootstrap.addSlide',
+                $accordionId,
+                LayoutHelper::render('joomla.healthchecks.section_header', ['title' => $panel['section']['title'], 'summary' => HealthCheckHelper::summarise($panel['section'])]),
+                $accordionId . '-' . $index,
+                'healthcheck-section'
+            ); ?>
+            <?php echo $panel['body']; ?>
+            <?php echo HTMLHelper::_('bootstrap.endSlide'); ?>
+        <?php endforeach; ?>
+        <?php echo HTMLHelper::_('bootstrap.endAccordion'); ?>
     <?php else : ?>
         <?php echo LayoutHelper::render('joomla.content.emptystate_module', [
             'textPrefix' => 'MOD_HEALTHCHECK',
