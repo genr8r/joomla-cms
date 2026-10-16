@@ -173,6 +173,38 @@ class ErrorRepositoryTest extends IntegrationTestCase implements DBTestInterface
         $this->assertSame(5, (int) $db->setQuery('SELECT SUM(' . $db->quoteName('hits') . ') FROM ' . $db->quoteName('#__frontenderrors_hits'))->loadResult());
     }
 
+    public function testLongSourceExtensionIsTruncated(): void
+    {
+        $host = str_repeat('h', 120) . '.example';
+        $long = '/media/com_' . str_repeat('x', 150) . '/a.js';
+        $this->assertSame(1, $this->repo->record([$this->report('ext1', '/a', 1, 'https://' . $host . '/x.js')], 'visitor', '2026-10-16 10:00:00'));
+        $this->assertSame(1, $this->repo->record([$this->report('ext2', '/a', 1, $long)], 'visitor', '2026-10-16 10:00:00'));
+
+        $db  = $this->getDBDriver();
+        $ids = array_map('intval', $db->setQuery('SELECT ' . $db->quoteName('id') . ' FROM ' . $db->quoteName('#__frontenderrors') . ' ORDER BY ' . $db->quoteName('id'))->loadColumn());
+        $this->assertCount(2, $ids);
+
+        $first  = $this->row($ids[0])->source_extension;
+        $second = $this->row($ids[1])->source_extension;
+        $this->assertSame(100, mb_strlen($first));
+        $this->assertSame(100, mb_strlen($second));
+        $this->assertStringStartsWith('external:hhh', $first);
+        $this->assertStringStartsWith('com_xxx', $second);
+    }
+
+    public function testHugeLineAndColumnAreStored(): void
+    {
+        $report         = $this->report('far');
+        $report['line'] = 99999999999;
+        $report['col']  = 99999999999;
+
+        $this->assertSame(1, $this->repo->record([$report], 'visitor', '2026-10-16 10:00:00'));
+        $db  = $this->getDBDriver();
+        $row = $this->row((int) $db->setQuery('SELECT MAX(' . $db->quoteName('id') . ') FROM ' . $db->quoteName('#__frontenderrors'))->loadResult());
+        $this->assertSame(4294967295, (int) $row->line);
+        $this->assertSame(4294967295, (int) $row->col);
+    }
+
     public function testSeparateRowsPerDayPageAndOrigin(): void
     {
         foreach (['/a', '/b'] as $page) {

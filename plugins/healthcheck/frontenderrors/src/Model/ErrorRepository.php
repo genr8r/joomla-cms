@@ -499,11 +499,12 @@ class ErrorRepository
         $db        = $this->db;
         $file      = (string) $report['file'];
         $source    = SourceResolver::resolve($file);
+        $source    = $source === null ? null : mb_substr($source, 0, 100, 'UTF-8');
         $finger    = (string) $report['fingerprint'];
         $type      = (string) $report['type'];
         $message   = (string) $report['message'];
-        $line      = (int) $report['line'];
-        $col       = (int) $report['col'];
+        $line      = max(0, min(4294967295, (int) $report['line']));
+        $col       = max(0, min(4294967295, (int) $report['col']));
         $stack     = (string) $report['stack'];
         $state     = self::STATE_OPEN;
         $query     = $db->getQuery(true)

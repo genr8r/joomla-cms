@@ -35,6 +35,9 @@ final class ReportNormaliser
 
     private const MAX_STACK = 2000;
 
+    /** Largest line or column number: the unsigned 32 bit limit of the MySQL columns. */
+    private const MAX_POSITION = 4294967295;
+
     /**
      * Normalise a decoded payload.
      *
@@ -80,8 +83,8 @@ final class ReportNormaliser
             $message = self::cut(self::scrub(self::str($report['message'] ?? '')), self::MAX_MESSAGE);
             $file    = self::cut(self::normaliseUrl(self::str($report['file'] ?? ''), $origin), self::MAX_FILE);
             $stack   = self::cut(self::scrub(self::str($report['stack'] ?? '')), self::MAX_STACK);
-            $line    = max(0, (int) ($report['line'] ?? 0));
-            $col     = max(0, (int) ($report['col'] ?? 0));
+            $line    = min(self::MAX_POSITION, max(0, (int) ($report['line'] ?? 0)));
+            $col     = min(self::MAX_POSITION, max(0, (int) ($report['col'] ?? 0)));
             $count   = max(1, min(self::MAX_COUNT, (int) ($report['count'] ?? 1)));
 
             $result[] = [

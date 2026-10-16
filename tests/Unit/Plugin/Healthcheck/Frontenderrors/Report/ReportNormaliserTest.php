@@ -47,6 +47,19 @@ class ReportNormaliserTest extends UnitTestCase
         return ReportNormaliser::normalise(['page' => $page, 'reports' => $reports], self::ROOT);
     }
 
+    public function testLineAndColumnAreClamped(): void
+    {
+        $out = self::norm([self::report(['line' => 99999999999, 'col' => '99999999999'])]);
+
+        $this->assertSame(4294967295, $out[0]['line']);
+        $this->assertSame(4294967295, $out[0]['col']);
+
+        $out = self::norm([self::report(['line' => -5, 'col' => -1])]);
+
+        $this->assertSame(0, $out[0]['line']);
+        $this->assertSame(0, $out[0]['col']);
+    }
+
     public function testValidReport(): void
     {
         $out = self::norm([self::report()]);
