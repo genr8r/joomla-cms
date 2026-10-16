@@ -155,15 +155,16 @@ final class Frontenderrors extends CMSPlugin implements SubscriberInterface
             return;
         }
 
-        $document->addScriptOptions('plg_system_frontenderrors', [
-            'endpoint' => Uri::root(true) . '/index.php?option=com_ajax&group=system&plugin=frontenderrors&format=json',
-            'sample'   => $settings->sampleRate,
-            'console'  => $settings->collectConsole,
-        ]);
-
         $wa = $document->getWebAssetManager();
         $wa->getRegistry()->addExtensionRegistryFile('plg_system_frontenderrors');
         $wa->useScript('plg_system_frontenderrors.collector');
+
+        // Options ride on the script tag: the script options element is rendered after a first-loaded script.
+        $wa->getAsset('script', 'plg_system_frontenderrors.collector')->setAttribute('data-options', json_encode([
+            'endpoint' => Uri::root(true) . '/index.php?option=com_ajax&group=system&plugin=frontenderrors&format=json',
+            'sample'   => $settings->sampleRate,
+            'console'  => $settings->collectConsole,
+        ], JSON_UNESCAPED_SLASHES));
     }
 
     /**

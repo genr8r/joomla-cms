@@ -9,6 +9,7 @@
       "name": "plg_system_frontenderrors.collector",
       "type": "script",
       "uri": "plg_system_frontenderrors/collector.min.js",
+      "weight": 1,
       "dependencies": [],
       "attributes": {}
     }

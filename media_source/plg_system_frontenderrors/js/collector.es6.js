@@ -4,22 +4,18 @@
  */
 
 /**
- * Frontend error collector. Standalone on purpose (no Joomla core dependency),
- * so it can be loaded first and see errors from every later script.
+ * Frontend error collector. Standalone and loaded first (low asset weight), so it sees errors
+ * from every later script. Its options travel on its own script tag (data-options), because the
+ * script options element is rendered after it. Nothing here may ever throw into the page.
  */
 ((window, document) => {
-  const KEY = 'plg_system_frontenderrors';
-  let options = window.Joomla && window.Joomla.getOptions ? window.Joomla.getOptions(KEY) : null;
+  const tag = document.currentScript;
+  let options = null;
 
-  if (!options) {
-    document.querySelectorAll('.joomla-script-options').forEach((el) => {
-      try {
-        const data = JSON.parse(el.text || el.textContent);
-        options = data[KEY] || options;
-      } catch (e) {
-        // Ignore malformed options.
-      }
-    });
+  try {
+    options = JSON.parse(tag.dataset.options);
+  } catch (e) {
+    options = window.Joomla && window.Joomla.getOptions ? window.Joomla.getOptions('plg_system_frontenderrors') : null;
   }
 
   if (!options) {
@@ -34,7 +30,9 @@
   }
 
   const MAX = 10;
-  const seen = {};
+  const LIMIT = 8000;
+  const known = {};
+  let seen = {};
   let reports = [];
   let timer = 0;
   let total = 0;
@@ -44,36 +42,71 @@
     window.JoomlaFrontendErrors = { reports, ready: false };
   }
 
-  const flush = () => {
-    if (!reports.length) {
-      return;
+  const str = (value) => {
+    try {
+      return String(value);
+    } catch (e) {
+      return typeof value;
     }
-
-    const body = JSON.stringify({ page: window.location.pathname, reports });
-    reports = [];
-    timer = 0;
-    nav.sendBeacon(options.endpoint, new Blob([body], { type: 'application/json' }));
   };
 
+  const guard = (fn) => (...args) => {
+    try {
+      fn(...args);
+    } catch (e) {
+      // Never throw into the page.
+    }
+  };
+
+  const send = (list) => {
+    const body = JSON.stringify({ page: window.location.pathname, reports: list });
+    const blob = new Blob([body], { type: 'application/json' });
+
+    if (blob.size <= LIMIT) {
+      nav.sendBeacon(options.endpoint, blob);
+    } else if (list.length > 1) {
+      send(list.slice(0, list.length >> 1));
+      send(list.slice(list.length >> 1));
+    } else if (list[0].stack) {
+      send([{ ...list[0], stack: '' }]);
+    }
+  };
+
+  const flush = guard(() => {
+    const list = reports;
+    reports = [];
+    seen = {};
+    timer = 0;
+
+    if (list.length) {
+      send(list);
+    }
+  });
+
   const add = (type, message, file, line, col, stack) => {
-    const msg = String(message);
-    const key = [type, msg, file, line, col].join('|');
+    const msg = str(message).slice(0, 500);
+    const f = file && str(file).slice(0, 255);
+    const key = [type, msg, f, line, col].join('|');
 
     if (seen[key]) {
       seen[key].count += 1;
       return;
     }
 
-    if (total >= MAX) {
-      return;
+    // A repeat after a flush is sent again as a fresh report; only new keys count toward the cap.
+    if (!known[key]) {
+      if (total >= MAX) {
+        return;
+      }
+
+      known[key] = 1;
+      total += 1;
     }
 
-    // Missing file, line, col and stack are filled in by the server.
     const report = {
-      type, message: msg, file, line, col, stack, count: 1,
+      type, message: msg, file: f, line, col, stack: stack && str(stack).slice(0, 2000), count: 1,
     };
     seen[key] = report;
-    total += 1;
     reports.push(report);
 
     if (!scan && !timer) {
@@ -81,7 +114,7 @@
     }
   };
 
-  window.addEventListener('error', (e) => {
+  window.addEventListener('error', guard((e) => {
     const t = e.target;
 
     if (t && t !== window && /^(SCRIPT|LINK|IMG)$/.test(t.tagName)) {
@@ -89,22 +122,25 @@
     } else {
       add('error', e.message, e.filename, e.lineno, e.colno, e.error && e.error.stack);
     }
-  }, true);
+  }), true);
 
-  window.addEventListener('unhandledrejection', (e) => {
+  window.addEventListener('unhandledrejection', guard((e) => {
     const r = e.reason;
-    add('rejection', String((r && r.message) || r), '', 0, 0, r && r.stack);
-  });
+    add('rejection', r && r.message ? r.message : str(r), '', 0, 0, r && r.stack);
+  }));
 
-  document.addEventListener('securitypolicyviolation', (e) => {
+  document.addEventListener('securitypolicyviolation', guard((e) => {
     add('csp', e.violatedDirective, e.blockedURI, e.lineNumber, e.columnNumber);
-  });
+  }));
 
   if (options.console) {
     const original = window.console.error;
     window.console.error = (...args) => {
-      add('console', args.join(' '));
-      original.apply(window.console, args);
+      try {
+        original.apply(window.console, args);
+      } finally {
+        guard(() => add('console', args.map(str).join(' ')))();
+      }
     };
   }
 
