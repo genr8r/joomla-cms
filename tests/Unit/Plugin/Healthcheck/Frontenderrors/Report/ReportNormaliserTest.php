@@ -165,11 +165,13 @@ class ReportNormaliserTest extends UnitTestCase
 
     public function testScrubKeepsOrdinaryPages(): void
     {
-        foreach ([
+        $pages = [
             '/joomla/en/blog/2024-news',
             '/joomla/index.php/component/content/article/5-faq',
             '/joomla/en/2024-annual-report-final-version',
-        ] as $page) {
+        ];
+
+        foreach ($pages as $page) {
             $this->assertSame($page, self::norm([self::report()], $page)[0]['page'], $page);
         }
     }
