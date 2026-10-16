@@ -35,7 +35,7 @@ return new class () implements ServiceProviderInterface {
         $container->set(
             PluginInterface::class,
             function (Container $container) {
-                // The Health Check namespace is only registered while that plugin is enabled.
+                // The repository is only used while the Health Check plugin is enabled.
                 $repository = PluginHelper::isEnabled('healthcheck', 'frontenderrors')
                     ? new ErrorRepository($container->get(DatabaseInterface::class))
                     : null;

@@ -127,6 +127,20 @@ final class Frontenderrors extends CMSPlugin implements SubscriberInterface
     }
 
     /**
+     * Whether the request method may carry a beacon (POST only).
+     *
+     * @param   string  $method  The request method
+     *
+     * @return  boolean
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    public static function isBeaconMethod(string $method): bool
+    {
+        return strtoupper($method) === 'POST';
+    }
+
+    /**
      * Add the collector script to site pages.
      *
      * @param   BeforeCompileHeadEvent  $event  The event
@@ -185,7 +199,9 @@ final class Frontenderrors extends CMSPlugin implements SubscriberInterface
         }
 
         try {
-            $settings = $this->repository && PluginHelper::isEnabled('healthcheck', 'frontenderrors')
+            $settings = $this->repository
+                && self::isBeaconMethod((string) $app->getInput()->getMethod())
+                && PluginHelper::isEnabled('healthcheck', 'frontenderrors')
                 ? $this->getSettings()
                 : null;
 

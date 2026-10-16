@@ -14,8 +14,6 @@ use Joomla\Plugin\System\Frontenderrors\Extension\Frontenderrors;
 use Joomla\Tests\Unit\UnitTestCase;
 use PHPUnit\Framework\Attributes\TestDox;
 
-require_once JPATH_ROOT . '/plugins/system/frontenderrors/src/Extension/Frontenderrors.php';
-
 /**
  * Test class for the Frontend Errors collector plugin decisions.
  *
@@ -76,5 +74,27 @@ class FrontenderrorsTest extends UnitTestCase
     public function testRejectsWhenNotCollecting(): void
     {
         $this->assertNull(Frontenderrors::acceptBody('{"page":"/a"}', false));
+    }
+
+    public function testRejectsEmptyBody(): void
+    {
+        $this->assertNull(Frontenderrors::acceptBody('', true));
+    }
+
+    public function testBodyLimitIsInclusive(): void
+    {
+        $exact = '{"p":"' . str_repeat('x', 8192 - 8) . '"}';
+
+        $this->assertSame(8192, \strlen($exact));
+        $this->assertIsArray(Frontenderrors::acceptBody($exact, true));
+        $this->assertNull(Frontenderrors::acceptBody($exact . ' ', true));
+    }
+
+    public function testOnlyPostIsABeacon(): void
+    {
+        $this->assertTrue(Frontenderrors::isBeaconMethod('POST'));
+        $this->assertTrue(Frontenderrors::isBeaconMethod('post'));
+        $this->assertFalse(Frontenderrors::isBeaconMethod('GET'));
+        $this->assertFalse(Frontenderrors::isBeaconMethod(''));
     }
 }
