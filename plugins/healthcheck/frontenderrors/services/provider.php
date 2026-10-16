@@ -18,6 +18,7 @@ use Joomla\DI\Container;
 use Joomla\DI\ServiceProviderInterface;
 use Joomla\Plugin\Healthcheck\Frontenderrors\Extension\Frontenderrors;
 use Joomla\Plugin\Healthcheck\Frontenderrors\Model\ErrorRepository;
+use Joomla\Plugin\Healthcheck\Frontenderrors\Model\ScanPages;
 
 return new class () implements ServiceProviderInterface {
     /**
@@ -37,7 +38,8 @@ return new class () implements ServiceProviderInterface {
                 $db     = $container->get(DatabaseInterface::class);
                 $plugin = new Frontenderrors(
                     (array) PluginHelper::getPlugin('healthcheck', 'frontenderrors'),
-                    new ErrorRepository($db)
+                    new ErrorRepository($db),
+                    new ScanPages($db)
                 );
 
                 $plugin->setApplication(Factory::getApplication());

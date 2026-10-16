@@ -10,11 +10,13 @@
 
 namespace Joomla\Plugin\Healthcheck\Frontenderrors\Extension;
 
+use Joomla\CMS\Access\Access;
 use Joomla\CMS\Event\Plugin\AjaxEvent;
 use Joomla\CMS\Language\Text;
 use Joomla\CMS\Log\Log;
 use Joomla\CMS\Plugin\CMSPlugin;
 use Joomla\CMS\Plugin\PluginHelper;
+use Joomla\CMS\Router\Route;
 use Joomla\CMS\Session\Session;
 use Joomla\CMS\Uri\Uri;
 use Joomla\Database\DatabaseAwareTrait;
@@ -22,6 +24,9 @@ use Joomla\Event\SubscriberInterface;
 use Joomla\Module\Healthcheck\Administrator\Event\HealthChecksEvent;
 use Joomla\Plugin\Healthcheck\Frontenderrors\Dashboard\Status;
 use Joomla\Plugin\Healthcheck\Frontenderrors\Model\ErrorRepository;
+use Joomla\Plugin\Healthcheck\Frontenderrors\Model\ScanPages;
+use Joomla\Plugin\Healthcheck\Frontenderrors\Report\NoiseFilter;
+use Joomla\Plugin\Healthcheck\Frontenderrors\Report\ReportNormaliser;
 use Joomla\Plugin\Healthcheck\Frontenderrors\Settings\Settings;
 
 // phpcs:disable PSR1.Files.SideEffects
@@ -52,6 +57,28 @@ final class Frontenderrors extends CMSPlugin implements SubscriberInterface
     private const MESSAGE_LENGTH = 80;
 
     /**
+     * Largest accepted scan results body, in bytes
+     *
+     * @since  __DEPLOY_VERSION__
+     */
+    public const MAX_BODY_BYTES = 8192;
+
+    /**
+     * Strings used by the admin script
+     *
+     * @since  __DEPLOY_VERSION__
+     */
+    private const SCRIPT_STRINGS = [
+        'JCLOSE',
+        'PLG_HEALTHCHECK_FRONTENDERRORS_REQUEST_FAILED',
+        'PLG_HEALTHCHECK_FRONTENDERRORS_SCAN_DONE',
+        'PLG_HEALTHCHECK_FRONTENDERRORS_SCAN_FRAMING_BLOCKED',
+        'PLG_HEALTHCHECK_FRONTENDERRORS_SCAN_PROGRESS',
+        'PLG_HEALTHCHECK_FRONTENDERRORS_SCAN_SKIPPED',
+        'PLG_HEALTHCHECK_FRONTENDERRORS_SCAN_STARTING',
+    ];
+
+    /**
      * Data for this request, loaded once
      *
      * @var    array|null
@@ -68,14 +95,23 @@ final class Frontenderrors extends CMSPlugin implements SubscriberInterface
     private bool $purged = false;
 
     /**
+     * Whether the admin script was added to the page
+     *
+     * @var    boolean
+     * @since  __DEPLOY_VERSION__
+     */
+    private bool $assetsLoaded = false;
+
+    /**
      * Constructor
      *
      * @param   array            $config      The plugin configuration
      * @param   ErrorRepository  $repository  Reads and purges the collected errors
+     * @param   ScanPages        $scanPages   Lists the menu items Scan now visits
      *
      * @since   __DEPLOY_VERSION__
      */
-    public function __construct(array $config, private readonly ErrorRepository $repository)
+    public function __construct(array $config, private readonly ErrorRepository $repository, private readonly ScanPages $scanPages)
     {
         parent::__construct($config);
     }
@@ -110,6 +146,8 @@ final class Frontenderrors extends CMSPlugin implements SubscriberInterface
         if (!$this->isAllowed($event)) {
             return;
         }
+
+        $this->loadAssets();
 
         $data      = $this->data();
         $settings  = $data['settings'];
@@ -201,6 +239,8 @@ final class Frontenderrors extends CMSPlugin implements SubscriberInterface
             return;
         }
 
+        $this->loadAssets();
+
         $settings = $data['settings'];
 
         $labels = [
@@ -220,19 +260,19 @@ final class Frontenderrors extends CMSPlugin implements SubscriberInterface
             'section' => Text::_('PLG_HEALTHCHECK_FRONTENDERRORS_SECTION'),
             'caption' => Text::sprintf('PLG_HEALTHCHECK_FRONTENDERRORS_TABLE_CAPTION', $settings->periodDays),
             'status'  => $this->tileStatus(),
-            'columns' => self::columns($labels, Uri::getInstance(Uri::root())->toString(['scheme', 'host', 'port'])),
+            'columns' => self::columns($labels, $this->origin()),
             'data'    => self::tableRows($data['pages'], $settings->thresholdPage),
         ]]);
     }
 
     /**
-     * Ajax entry point. The tasks are added together with the admin script.
+     * Ajax entry point for the admin script: pages, scanresults, details and state.
      *
      * @param   AjaxEvent  $event  The Ajax event
      *
      * @return  void
      *
-     * @throws  \RuntimeException  On a missing token or permission, or an unknown task
+     * @throws  \RuntimeException  On a missing token or permission, a wrong method or an unknown task
      *
      * @since   __DEPLOY_VERSION__
      */
@@ -244,7 +284,106 @@ final class Frontenderrors extends CMSPlugin implements SubscriberInterface
             throw new \RuntimeException(Text::_('JERROR_ALERTNOAUTHOR'), 403);
         }
 
-        throw new \RuntimeException('Unknown task', 400);
+        $this->loadLanguage();
+
+        $input    = $app->getInput();
+        $task     = $input->getCmd('task');
+        $settings = Settings::fromParams($this->params);
+        $post     = \in_array($task, ['scanresults', 'state'], true);
+
+        if ($post && strtoupper($input->getMethod()) !== 'POST') {
+            throw new \RuntimeException('Method not allowed', 405);
+        }
+
+        $result = match ($task) {
+            'pages'       => ['pages' => $this->scanList($settings->scanLimit)],
+            'scanresults' => ['stored' => $this->storeScan($settings)],
+            'details'     => ['html' => $this->details(mb_substr((string) $input->get('page', '', 'raw'), 0, 255), $settings->periodDays)],
+            'state'       => ['ok' => $this->repository->setState($input->post->getInt('id'), $input->post->getInt('state', -1), gmdate('Y-m-d H:i:s'))],
+            default       => throw new \RuntimeException('Unknown task', 400),
+        };
+
+        $event->addResult($result);
+    }
+
+    /**
+     * The pages Scan now visits: home first, then guest-visible menu items in menu order.
+     *
+     * @param   string    $home    Path of the site home, with the site base and a trailing slash
+     * @param   string[]  $paths   Routed menu item paths, normally including the site base
+     * @param   string    $origin  Scheme, host and port of the site, stripped from absolute links
+     * @param   integer   $limit   Maximum number of pages
+     *
+     * @return  string[]
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    public static function scanPageList(string $home, array $paths, string $origin, int $limit): array
+    {
+        $origin = rtrim($origin, '/');
+        $pages  = [$home];
+
+        foreach ($paths as $path) {
+            $path = (string) $path;
+
+            if ($origin !== '' && strncasecmp($path, $origin . '/', \strlen($origin) + 1) === 0) {
+                $path = substr($path, \strlen($origin));
+            }
+
+            if ($path === '' || $path[0] !== '/' || str_starts_with($path, '//')) {
+                continue;
+            }
+
+            $pages[] = $path;
+        }
+
+        return \array_slice(array_values(array_unique($pages)), 0, max(0, $limit));
+    }
+
+    /**
+     * Decode one page of scan results.
+     *
+     * @param   string  $body  Raw request body
+     *
+     * @return  array|null  Null when empty, too large or not a JSON object
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    public static function scanPayload(string $body): ?array
+    {
+        if ($body === '' || \strlen($body) > self::MAX_BODY_BYTES) {
+            return null;
+        }
+
+        $payload = json_decode($body, true);
+
+        return \is_array($payload) ? $payload : null;
+    }
+
+    /**
+     * Render the details layout for the errors of one page.
+     *
+     * @param   string   $layout      Path of the layout file
+     * @param   array    $errors      Rows from ErrorRepository::pageErrors()
+     * @param   integer  $periodDays  Look-back period in days
+     *
+     * @return  string
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    public static function renderDetails(string $layout, array $errors, int $periodDays): string
+    {
+        $displayData = ['errors' => $errors, 'periodDays' => $periodDays];
+
+        ob_start();
+
+        try {
+            include $layout;
+        } finally {
+            $html = (string) ob_get_clean();
+        }
+
+        return $html;
     }
 
     /**
@@ -345,6 +484,142 @@ final class Frontenderrors extends CMSPlugin implements SubscriberInterface
     }
 
     /**
+     * Routed paths of the pages Scan now visits.
+     *
+     * @param   integer  $limit  Maximum number of pages
+     *
+     * @return  string[]
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    private function scanList(int $limit): array
+    {
+        $paths = [];
+
+        foreach ($this->scanPages->itemIds($limit, Access::getAuthorisedViewLevels(0)) as $id) {
+            try {
+                $paths[] = Route::link('site', 'index.php?Itemid=' . $id, false);
+            } catch (\Throwable $e) {
+                // A menu item that cannot be routed is not scanned.
+            }
+        }
+
+        return self::scanPageList(Uri::root(true) . '/', $paths, $this->origin(), $limit);
+    }
+
+    /**
+     * Store the reports of one scanned page, read from the request body.
+     *
+     * @param   Settings  $settings  The plugin settings
+     *
+     * @return  integer  Number of reports stored
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    private function storeScan(Settings $settings): int
+    {
+        $payload = self::scanPayload((string) file_get_contents('php://input', false, null, 0, self::MAX_BODY_BYTES + 1));
+
+        if ($payload === null) {
+            return 0;
+        }
+
+        $reports = array_values(array_filter(
+            ReportNormaliser::normalise($payload, Uri::root()),
+            static fn (array $report): bool => NoiseFilter::keep($report, $settings->ignorePatterns)
+        ));
+
+        // Not in a transaction: record() relies on autocommit to recover from a concurrent insert.
+        return $reports ? $this->repository->record($reports, 'scan', gmdate('Y-m-d H:i:s')) : 0;
+    }
+
+    /**
+     * Details dialog HTML for one page.
+     *
+     * @param   string   $page        Page path
+     * @param   integer  $periodDays  Look-back period in days
+     *
+     * @return  string
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    private function details(string $page, int $periodDays): string
+    {
+        [$from, $to] = self::period($periodDays, time(), 0);
+
+        return self::renderDetails(
+            PluginHelper::getLayoutPath('healthcheck', 'frontenderrors', 'details'),
+            $page === '' ? [] : $this->repository->pageErrors($page, $from, $to),
+            $periodDays
+        );
+    }
+
+    /**
+     * Add the admin script, its options and strings to the page, once.
+     *
+     * @return  void
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    private function loadAssets(): void
+    {
+        if ($this->assetsLoaded) {
+            return;
+        }
+
+        $this->assetsLoaded = true;
+        $document           = $this->getApplication()->getDocument();
+
+        if (!$document || !method_exists($document, 'getWebAssetManager')) {
+            return;
+        }
+
+        $wa = $document->getWebAssetManager();
+        $wa->getRegistry()->addExtensionRegistryFile('plg_healthcheck_frontenderrors');
+        $wa->useScript('plg_healthcheck_frontenderrors.admin');
+
+        $document->addScriptOptions('plg_healthcheck_frontenderrors', [
+            'ajax'   => 'index.php?option=com_ajax&group=healthcheck&plugin=frontenderrors&format=json',
+            'token'  => Session::getFormToken(),
+            'origin' => $this->origin(),
+        ]);
+
+        foreach (self::SCRIPT_STRINGS as $key) {
+            Text::script($key);
+        }
+    }
+
+    /**
+     * Scheme, host and port of the site.
+     *
+     * @return  string
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    private function origin(): string
+    {
+        return Uri::getInstance(Uri::root())->toString(['scheme', 'host', 'port']);
+    }
+
+    /**
+     * First and last day (UTC, `Y-m-d`) of a period ending a number of periods before today.
+     *
+     * @param   integer  $days     Length of the period in days
+     * @param   integer  $now      Current Unix time
+     * @param   integer  $periods  0 for the current period, 1 for the one before
+     *
+     * @return  string[]  [first day, last day]
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    private static function period(int $days, int $now, int $periods): array
+    {
+        $end = $now - $periods * $days * 86400;
+
+        return [gmdate('Y-m-d', $end - ($days - 1) * 86400), gmdate('Y-m-d', $end)];
+    }
+
+    /**
      * Right context and a Super User.
      *
      * @param   HealthChecksEvent  $event  The health-check event object.
@@ -379,10 +654,9 @@ final class Frontenderrors extends CMSPlugin implements SubscriberInterface
 
         $settings = Settings::fromParams($this->params);
         $now      = time();
-        $today    = gmdate('Y-m-d', $now);
-        $from     = gmdate('Y-m-d', strtotime('-' . ($settings->periodDays - 1) . ' days', $now));
-        $prevTo   = gmdate('Y-m-d', strtotime('-' . $settings->periodDays . ' days', $now));
-        $prevFrom = gmdate('Y-m-d', strtotime('-' . (2 * $settings->periodDays - 1) . ' days', $now));
+
+        [$from, $today]      = self::period($settings->periodDays, $now, 0);
+        [$prevFrom, $prevTo] = self::period($settings->periodDays, $now, 1);
 
         $data = [
             'settings' => $settings,
@@ -395,7 +669,7 @@ final class Frontenderrors extends CMSPlugin implements SubscriberInterface
         try {
             if (!$this->purged) {
                 $this->purged = true;
-                $this->repository->purge(gmdate('Y-m-d', strtotime('-' . $settings->retentionDays . ' days', $now)), gmdate('Y-m-d H:i:s', $now));
+                $this->repository->purge(gmdate('Y-m-d', $now - $settings->retentionDays * 86400), gmdate('Y-m-d H:i:s', $now));
             }
 
             $data['summary']  = $this->repository->summary($from, $today);

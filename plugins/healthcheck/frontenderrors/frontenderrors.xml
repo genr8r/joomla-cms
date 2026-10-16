@@ -13,6 +13,7 @@
 	<files>
 		<folder plugin="frontenderrors">services</folder>
 		<folder>src</folder>
+		<folder>tmpl</folder>
 	</files>
 	<languages>
 		<language tag="en-GB">language/en-GB/plg_healthcheck_frontenderrors.ini</language>
