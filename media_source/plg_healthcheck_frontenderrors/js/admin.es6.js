@@ -84,7 +84,8 @@ const postJson = (task, body) => request(task, {
 
 // Split the reports of one page so that every request stays under the server's body limit.
 const chunks = (page, reports) => {
-  const size = JSON.stringify({ page, reports }).length;
+  // Bytes, not characters: the server limit is in bytes and messages may be non-ASCII.
+  const size = new Blob([JSON.stringify({ page, reports })]).size;
 
   if (size <= LIMIT) {
     return [reports];
