@@ -84,24 +84,51 @@ const stopOnError = (result) => {
   }
 };
 
+// A busy batch means another request is counting a table of the pass: wait and ask again, this many times.
+const BUSY_WAIT_MS = 2000;
+const BUSY_TRIES = 30;
+
+const wait = (ms) => new Promise((resolve) => {
+  setTimeout(resolve, ms);
+});
+
+const stalled = () => new Error(text('PLG_HEALTHCHECK_DATABASE_CHECKNOW_STALLED'));
+
 /**
  * Run zero-date batches until the pass is complete. Every batch checks at least one table, so a
  * batch that makes no progress means another request restarted the pass: stop rather than loop.
+ * A busy batch did nothing because another request (another tab, the automatic refresh) is running
+ * the pass, even for the first, restarting, request: continuing that pass is fine, so wait and ask
+ * again, up to BUSY_TRIES times in a row.
  */
 const zeroDatesPass = async (restart, onProgress) => {
   let result = await post('zerodates', { restart: restart ? '1' : '0' });
+  let busyTries = 0;
   onProgress(result);
   stopOnError(result);
 
   while (!result.complete) {
     const previous = result;
 
+    if (result.busy) {
+      busyTries += 1;
+
+      if (busyTries > BUSY_TRIES) {
+        throw stalled();
+      }
+
+      await wait(BUSY_WAIT_MS);
+    } else {
+      busyTries = 0;
+    }
+
     result = await post('zerodates', { restart: '0' });
     onProgress(result);
     stopOnError(result);
 
-    if (!result.complete && result.checked <= previous.checked && result.total === previous.total) {
-      throw new Error(text('PLG_HEALTHCHECK_DATABASE_CHECKNOW_STALLED'));
+    if (!result.complete && !result.busy && !previous.busy
+      && result.checked <= previous.checked && result.total === previous.total) {
+      throw stalled();
     }
   }
 
