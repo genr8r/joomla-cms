@@ -43,8 +43,9 @@ final class ZeroDateScanner
     /**
      * The state before the first pass.
      *
-     * `inprogress` is the key of the table being counted right now, `skipped` the tables a request died on
-     * (key => spelling), and `error` the table the last run could not check ({table, at}) or null.
+     * `inprogress` is the table being counted right now ({key, at}, `at` from the scanner's clock) or null,
+     * `skipped` the tables a request died on (key => {name, at}, `at` Y-m-d H:i:s UTC, or null for an entry
+     * cached by an older version), and `error` the table the last run could not check ({table, at}) or null.
      *
      * @return  array
      *
@@ -66,18 +67,54 @@ final class ZeroDateScanner
     }
 
     /**
-     * Begin a new pass. Earlier results are kept until their tables are checked again; skipped tables are
-     * tried again.
+     * Seconds after which an in-progress marker means its request died: the longest a request may run
+     * (the time budget or PHP's time limit, 300 when that is unlimited) plus a margin.
      *
-     * @param   array   $state        The state
-     * @param   string  $tablePrefix  The site's table prefix
-     * @param   string  $now          Current time (Y-m-d H:i:s, UTC)
+     * @param   float    $budgetSeconds     Seconds a run may take
+     * @param   integer  $maxExecutionTime  PHP's max_execution_time, 0 for unlimited
+     *
+     * @return  float
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    public static function deadAfter(float $budgetSeconds, int $maxExecutionTime): float
+    {
+        return (float) max($budgetSeconds, $maxExecutionTime > 0 ? $maxExecutionTime : 300) + 30.0;
+    }
+
+    /**
+     * Whether another request is counting the cursor table right now: its marker is younger than $deadAfter.
+     *
+     * @param   array  $state      The state
+     * @param   float  $now        Current time from the scanner's clock
+     * @param   float  $deadAfter  Seconds after which a marker means its request died
+     *
+     * @return  boolean
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    public static function isBusy(array $state, float $now, float $deadAfter): bool
+    {
+        $marker = self::marker($state);
+
+        return $marker !== null && $marker['key'] === self::cursorKey($state) && $now - $marker['at'] < $deadAfter;
+    }
+
+    /**
+     * Begin a new pass. Earlier results are kept until their tables are checked again. Tables skipped as too
+     * large within the last $refreshHours stay skipped, so Check now does not die on them again; older ones
+     * are tried again.
+     *
+     * @param   array    $state         The state
+     * @param   string   $tablePrefix   The site's table prefix
+     * @param   string   $now           Current time (Y-m-d H:i:s, UTC)
+     * @param   integer  $refreshHours  Hours a result stays fresh
      *
      * @return  array
      *
      * @since   __DEPLOY_VERSION__
      */
-    public function start(array $state, string $tablePrefix, string $now): array
+    public function start(array $state, string $tablePrefix, string $now, int $refreshHours): array
     {
         $tables = [];
 
@@ -97,7 +134,10 @@ final class ZeroDateScanner
         $state['tables']     = $tables;
         $state['complete']   = false;
         $state['inprogress'] = null;
-        $state['skipped']    = [];
+        $state['skipped']    = array_filter(
+            self::skipped($state),
+            static fn (array $entry): bool => !ResultStore::isStale($entry['at'], $refreshHours, $now)
+        );
         $state['error']      = null;
 
         return $state;
@@ -106,9 +146,11 @@ final class ZeroDateScanner
     /**
      * Check tables from the cursor until the budget is used up, always at least one.
      *
-     * Before each table its key is put in `inprogress` and the state is handed to $beforeTable, so the caller
-     * can store it: when a request dies on a huge table, the next run finds the marker on the cursor table,
-     * records it in `skipped` and moves on instead of dying on it again.
+     * Before each table it is marked in `inprogress` with the clock time, and the state is handed to
+     * $beforeTable, so the caller can store it. A marker on the cursor table older than $deadAfter means the
+     * request counting it died: the table is recorded in `skipped` and the pass moves on instead of dying on
+     * it again. A younger marker means another request is counting it now: the state is returned unchanged
+     * (callers check isBusy() first). Tables in `skipped` are passed over.
      *
      * A table that is gone is dropped from the results. Any other failure keeps the table's previous result,
      * records `error`, leaves the cursor on that table and ends the run, so a pass never completes through
@@ -118,42 +160,64 @@ final class ZeroDateScanner
      * @param   string         $tablePrefix    The site's table prefix
      * @param   float          $budgetSeconds  Seconds this run may take
      * @param   string         $now            Current time (Y-m-d H:i:s, UTC)
+     * @param   integer        $refreshHours   Hours a result stays fresh, for a pass started here
+     * @param   float          $deadAfter      Seconds after which a marker means its request died
      * @param   \Closure|null  $beforeTable    Called with the state before each table is counted
      *
      * @return  array
      *
      * @since   __DEPLOY_VERSION__
      */
-    public function run(array $state, string $tablePrefix, float $budgetSeconds, string $now, ?\Closure $beforeTable = null): array
-    {
+    public function run(
+        array $state,
+        string $tablePrefix,
+        float $budgetSeconds,
+        string $now,
+        int $refreshHours,
+        float $deadAfter,
+        ?\Closure $beforeTable = null
+    ): array {
         if (($state['pass'] ?? null) === null) {
-            $state = $this->start($state, $tablePrefix, $now);
+            $state = $this->start($state, $tablePrefix, $now, $refreshHours);
         }
 
         $state += self::emptyState();
         $began  = ($this->clock)();
-        $keys   = array_keys($state['tables']);
-        $total  = \count($keys);
 
-        // A marker for another table than the cursor one is left over from an older pass.
-        if ($state['inprogress'] !== null && $state['inprogress'] !== ($keys[$state['cursor']] ?? null)) {
-            $state['inprogress'] = null;
+        if (self::isBusy($state, $began, $deadAfter)) {
+            return $state;
         }
+
+        $state['skipped'] = self::skipped($state);
+        $keys             = array_keys($state['tables']);
+        $total            = \count($keys);
+
+        // Not busy: a marker on the cursor table is dead; any other marker (or an older shape) is left over.
+        $marker              = self::marker($state);
+        $dead                = $marker !== null && $marker['key'] === self::cursorKey($state);
+        $state['inprogress'] = null;
 
         while ($state['cursor'] < $total) {
             $key   = $keys[$state['cursor']];
             $table = $state['tables'][$key];
 
-            if ($state['inprogress'] === $key) {
+            if ($dead) {
                 // The request that counted this table died: too large to check in one request.
-                $state['skipped'][$key] = $table['name'];
-                $state['inprogress']    = null;
+                $dead                   = false;
+                $state['skipped'][$key] = ['name' => $table['name'], 'at' => $now];
                 $state['cursor']++;
 
                 continue;
             }
 
-            $state['inprogress'] = $key;
+            if (isset($state['skipped'][$key])) {
+                // Skipped as too large recently: not tried again before the refresh hours are up.
+                $state['cursor']++;
+
+                continue;
+            }
+
+            $state['inprogress'] = ['key' => (string) $key, 'at' => (float) ($this->clock)()];
 
             if ($beforeTable !== null) {
                 $beforeTable($state);
@@ -164,7 +228,7 @@ final class ZeroDateScanner
             } catch (MissingObjectException $e) {
                 // Dropped or renamed since the pass started.
                 $counts = null;
-            } catch (\RuntimeException $e) {
+            } catch (\Throwable $e) {
                 Log::add('Database Health Check: could not check ' . $table['name'] . ': ' . $e->getMessage(), Log::WARNING, 'healthcheck');
 
                 $state['inprogress'] = null;
@@ -283,5 +347,62 @@ final class ZeroDateScanner
     public static function progress(array $state): array
     {
         return ['checked' => (int) ($state['cursor'] ?? 0), 'total' => \count($state['tables'] ?? [])];
+    }
+    /**
+     * The in-progress marker, or null when there is none or it has an older shape.
+     *
+     * @param   array  $state  The state
+     *
+     * @return  array{key:string, at:float}|null
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    private static function marker(array $state): ?array
+    {
+        $marker = $state['inprogress'] ?? null;
+
+        if (!\is_array($marker) || !isset($marker['key'], $marker['at']) || !is_numeric($marker['at'])) {
+            return null;
+        }
+
+        return ['key' => (string) $marker['key'], 'at' => (float) $marker['at']];
+    }
+
+    /**
+     * Key of the table at the cursor, or null when the pass is through.
+     *
+     * @param   array  $state  The state
+     *
+     * @return  ?string
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    private static function cursorKey(array $state): ?string
+    {
+        $key = array_keys($state['tables'] ?? [])[(int) ($state['cursor'] ?? 0)] ?? null;
+
+        return $key === null ? null : (string) $key;
+    }
+
+    /**
+     * The skipped tables as key => {name, at}; a bare name cached by an older version gets no time.
+     *
+     * @param   array  $state  The state
+     *
+     * @return  array<string, array{name:string, at:?string}>
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    private static function skipped(array $state): array
+    {
+        $skipped = [];
+
+        foreach ((array) ($state['skipped'] ?? []) as $key => $entry) {
+            $skipped[$key] = \is_array($entry)
+                ? ['name' => (string) ($entry['name'] ?? $key), 'at' => isset($entry['at']) ? (string) $entry['at'] : null]
+                : ['name' => (string) $entry, 'at' => null];
+        }
+
+        return $skipped;
     }
 }

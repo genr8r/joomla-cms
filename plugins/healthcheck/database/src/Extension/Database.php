@@ -385,11 +385,13 @@ final class Database extends CMSPlugin implements SubscriberInterface
      * still fresh is returned as is, without scanning (ZeroDateScanner::run() would only touch its time).
      *
      * The state is stored before each table is counted, with that table marked in progress, so a request
-     * that dies on a huge table leaves the marker behind and the next request skips that table.
+     * that dies on a huge table leaves the marker behind and the next request skips that table. While the
+     * marker is younger than the longest a request may run, another request is counting that table: the
+     * batch (even a restart) reports `busy` and stores nothing, which would revert the other's progress.
      *
      * @param   boolean  $restart  Start a new pass from the first table
      *
-     * @return  array{complete:bool, error:bool, checked:int, total:int}
+     * @return  array{complete:bool, error:bool, checked:int, total:int, busy:bool}
      *
      * @since   __DEPLOY_VERSION__
      */
@@ -401,17 +403,25 @@ final class Database extends CMSPlugin implements SubscriberInterface
         $catalog = CatalogFactory::for($db);
 
         if (!$this->params->get('check_zerodates', 1) || !$catalog->supportsZeroDates()) {
-            return ['complete' => true, 'error' => false, 'checked' => 0, 'total' => 0];
+            return ['complete' => true, 'error' => false, 'checked' => 0, 'total' => 0, 'busy' => false];
         }
 
-        $now     = (new Date())->toSql();
-        $prefix  = $db->getPrefix();
-        $scanner = new ZeroDateScanner($catalog, static fn (): float => microtime(true));
-        $state   = $this->store->get('zerodates') ?? ZeroDateScanner::emptyState();
-        $started = ($state['pass'] ?? null) !== null;
+        $now       = (new Date())->toSql();
+        $prefix    = $db->getPrefix();
+        $hours     = $this->refreshHours();
+        $budget    = (float) max(0, min(20, (int) $this->params->get('time_budget', 5)));
+        $deadAfter = ZeroDateScanner::deadAfter($budget, (int) \ini_get('max_execution_time'));
+        $clock     = static fn (): float => microtime(true);
+        $scanner   = new ZeroDateScanner($catalog, $clock);
+        $state     = $this->store->get('zerodates') ?? ZeroDateScanner::emptyState();
+        $started   = ($state['pass'] ?? null) !== null;
+
+        if (ZeroDateScanner::isBusy($state, $clock(), $deadAfter)) {
+            return self::progressResult($state, true);
+        }
 
         if ($started && !$restart && !empty($state['complete'])) {
-            if (!ResultStore::isStale($state['updated'] ?? null, $this->refreshHours(), $now)) {
+            if (!ResultStore::isStale($state['updated'] ?? null, $hours, $now)) {
                 return self::progressResult($state);
             }
 
@@ -420,11 +430,10 @@ final class Database extends CMSPlugin implements SubscriberInterface
 
         // A missing pass is started by run() itself.
         if ($started && $restart) {
-            $state = $scanner->start($state, $prefix, $now);
+            $state = $scanner->start($state, $prefix, $now, $hours);
         }
 
-        $budget = (float) max(0, min(20, (int) $this->params->get('time_budget', 5)));
-        $state  = $scanner->run($state, $prefix, $budget, $now, fn (array $state) => $this->store->put('zerodates', $state));
+        $state = $scanner->run($state, $prefix, $budget, $now, $hours, $deadAfter, fn (array $state) => $this->store->put('zerodates', $state));
 
         $this->store->put('zerodates', $state);
 
@@ -433,19 +442,21 @@ final class Database extends CMSPlugin implements SubscriberInterface
 
     /**
      * What a zero-date batch reports to the admin script. `error` means a table could not be checked: the
-     * pass is not complete and Check now stops instead of retrying.
+     * pass is not complete and Check now stops instead of retrying. `busy` means another request is counting
+     * a table of the pass right now: nothing was done, ask again shortly.
      *
-     * @param   array  $state  Zero-date scanner state
+     * @param   array    $state  Zero-date scanner state
+     * @param   boolean  $busy   Whether another request is running the pass
      *
-     * @return  array{complete:bool, error:bool, checked:int, total:int}
+     * @return  array{complete:bool, error:bool, checked:int, total:int, busy:bool}
      *
      * @since   __DEPLOY_VERSION__
      */
-    public static function progressResult(array $state): array
+    public static function progressResult(array $state, bool $busy = false): array
     {
         $error = !empty($state['error']);
 
-        return ['complete' => !$error && !empty($state['complete']), 'error' => $error] + ZeroDateScanner::progress($state);
+        return ['complete' => !$error && !empty($state['complete']), 'error' => $error] + ZeroDateScanner::progress($state) + ['busy' => $busy];
     }
 
     /**
@@ -548,9 +559,10 @@ final class Database extends CMSPlugin implements SubscriberInterface
             $state   = $data['state'] ?? [];
             $skipped = [];
 
-            foreach ($state['skipped'] ?? [] as $skippedKey => $name) {
+            foreach ($state['skipped'] ?? [] as $skippedKey => $entry) {
                 if ($all || strtolower((string) $skippedKey) === $key) {
-                    $skipped[] = (string) $name;
+                    // {name, at}; a bare name was cached by an older version.
+                    $skipped[] = (string) (\is_array($entry) ? ($entry['name'] ?? $skippedKey) : $entry);
                 }
             }
 

@@ -321,9 +321,9 @@ class AjaxTest extends IntegrationTestCase implements DBTestInterface
         $budget = ['params' => ['time_budget' => 0]];
         $post   = fn (string $restart) => $this->ajax('POST', ['task' => 'zerodates'], ['restart' => $restart], $budget);
 
-        $this->assertSame(['complete' => false, 'error' => false, 'checked' => 1, 'total' => 3], $post('0'));
-        $this->assertSame(['complete' => false, 'error' => false, 'checked' => 2, 'total' => 3], $post('0'));
-        $this->assertSame(['complete' => true, 'error' => false, 'checked' => 3, 'total' => 3], $post('0'));
+        $this->assertSame(['complete' => false, 'error' => false, 'checked' => 1, 'total' => 3, 'busy' => false], $post('0'));
+        $this->assertSame(['complete' => false, 'error' => false, 'checked' => 2, 'total' => 3, 'busy' => false], $post('0'));
+        $this->assertSame(['complete' => true, 'error' => false, 'checked' => 3, 'total' => 3, 'busy' => false], $post('0'));
 
         $findings = ZeroDateScanner::findings($this->store()->get('zerodates'), new IgnoreList([]));
         $prefix   = $this->db->getPrefix();
@@ -331,8 +331,8 @@ class AjaxTest extends IntegrationTestCase implements DBTestInterface
         $this->assertSame([1, 1], array_column($findings, 'zero'));
 
         // A fresh complete pass is not scanned again; restart=1 begins a new one.
-        $this->assertSame(['complete' => true, 'error' => false, 'checked' => 3, 'total' => 3], $post('0'));
-        $this->assertSame(['complete' => false, 'error' => false, 'checked' => 1, 'total' => 3], $post('1'));
+        $this->assertSame(['complete' => true, 'error' => false, 'checked' => 3, 'total' => 3, 'busy' => false], $post('0'));
+        $this->assertSame(['complete' => false, 'error' => false, 'checked' => 1, 'total' => 3, 'busy' => false], $post('1'));
 
         // A stale complete pass starts over without restart.
         $state             = $this->store()->get('zerodates');
@@ -340,7 +340,7 @@ class AjaxTest extends IntegrationTestCase implements DBTestInterface
         $state['complete'] = true;
         $state['updated']  = '2000-01-01 00:00:00';
         $this->store()->put('zerodates', $state);
-        $this->assertSame(['complete' => false, 'error' => false, 'checked' => 1, 'total' => 3], $post('0'));
+        $this->assertSame(['complete' => false, 'error' => false, 'checked' => 1, 'total' => 3, 'busy' => false], $post('0'));
 
         $html = $this->ajax('GET', ['task' => 'details', 'kind' => 'zerodates', 'key' => strtoupper($prefix) . 'ZD_B'])['html'];
         $this->assertStringContainsString($prefix . 'zd_b', $html);
@@ -367,27 +367,44 @@ class AjaxTest extends IntegrationTestCase implements DBTestInterface
         $post   = fn () => $this->ajax('POST', ['task' => 'zerodates'], ['restart' => '0'], $budget);
 
         // Date tables with the plugin's prefix: the ignore table, zd_a and zd_b.
-        $this->assertSame(['complete' => false, 'error' => false, 'checked' => 1, 'total' => 3], $post());
+        $this->assertSame(['complete' => false, 'error' => false, 'checked' => 1, 'total' => 3, 'busy' => false], $post());
 
         // The request for the second table died while counting it: its marker is still stored.
         $state = $this->store()->get('zerodates');
         $key   = array_keys($state['tables'])[1];
         $this->assertNull($state['inprogress']);
-        $state['inprogress'] = $key;
+        $state['inprogress'] = ['key' => $key, 'at' => microtime(true) - 100000];
         $this->store()->put('zerodates', $state);
 
-        $this->assertSame(['complete' => true, 'error' => false, 'checked' => 3, 'total' => 3], $post());
+        $this->assertSame(['complete' => true, 'error' => false, 'checked' => 3, 'total' => 3, 'busy' => false], $post());
 
         $state = $this->store()->get('zerodates');
-        $this->assertSame([$key => $this->db->getPrefix() . 'zd_a'], $state['skipped']);
+        $this->assertSame([$key], array_keys($state['skipped']));
+        $this->assertSame($this->db->getPrefix() . 'zd_a', $state['skipped'][$key]['name']);
         $this->assertNull($state['inprogress']);
+
+        // Check now within the refresh hours keeps it skipped: the new pass completes without counting it.
+        $restart = fn () => $this->ajax('POST', ['task' => 'zerodates'], ['restart' => '1'], ['params' => ['time_budget' => 20]]);
+        $this->assertSame(['complete' => true, 'error' => false, 'checked' => 3, 'total' => 3, 'busy' => false], $restart());
+        $this->assertSame([$key], array_keys($this->store()->get('zerodates')['skipped']));
+
+        // A marker younger than the dead-after time: another request is counting, so the batch is busy and
+        // nothing is stored.
+        $state               = $this->store()->get('zerodates');
+        $state['cursor']     = 1;
+        $state['complete']   = false;
+        $state['inprogress'] = ['key' => $key, 'at' => microtime(true)];
+        $this->store()->put('zerodates', $state);
+
+        $this->assertSame(['complete' => false, 'error' => false, 'checked' => 1, 'total' => 3, 'busy' => true], $post());
+        $this->assertSame($state, $this->store()->get('zerodates'));
     }
 
     public function testZeroDatesOffIsComplete(): void
     {
         $result = $this->ajax('POST', ['task' => 'zerodates'], [], ['params' => ['check_zerodates' => 0]]);
 
-        $this->assertSame(['complete' => true, 'error' => false, 'checked' => 0, 'total' => 0], $result);
+        $this->assertSame(['complete' => true, 'error' => false, 'checked' => 0, 'total' => 0, 'busy' => false], $result);
         $this->assertNull($this->store()->get('zerodates'));
     }
 

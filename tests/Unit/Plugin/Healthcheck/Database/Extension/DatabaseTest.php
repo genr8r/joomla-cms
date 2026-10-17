@@ -64,11 +64,24 @@ class DatabaseTest extends UnitTestCase
      */
     private int $queries = 0;
 
+    /**
+     * @var    integer  Values the stub cache was asked to store
+     * @since  __DEPLOY_VERSION__
+     */
+    private int $stores = 0;
+
+    /**
+     * @var    array  $_POST before the test
+     * @since  __DEPLOY_VERSION__
+     */
+    private array $post = [];
+
     protected function setUp(): void
     {
         parent::setUp();
 
         $this->get    = $_GET;
+        $this->post   = $_POST;
         $this->method = $_SERVER['REQUEST_METHOD'] ?? null;
 
         $language = $this->createStub(Language::class);
@@ -88,6 +101,7 @@ class DatabaseTest extends UnitTestCase
         Factory::$language    = null;
         Factory::$application = null;
         $_GET                 = $this->get;
+        $_POST                = $this->post;
 
         if ($this->method === null) {
             unset($_SERVER['REQUEST_METHOD']);
@@ -245,6 +259,11 @@ class DatabaseTest extends UnitTestCase
 
         $cache = $this->createStub(OutputController::class);
         $cache->method('get')->willReturnCallback(static fn ($key) => $cached[$key] ?? false);
+        $cache->method('store')->willReturnCallback(function (): bool {
+            $this->stores++;
+
+            return true;
+        });
 
         $factory = $this->createStub(CacheControllerFactoryInterface::class);
         $factory->method('createCacheController')->willReturn($cache);
@@ -683,12 +702,18 @@ class DatabaseTest extends UnitTestCase
         $state['pass']     = '2026-10-17 10:00:00';
         $state['updated']  = '2026-10-17 10:05:00';
         $state['complete'] = true;
-        $state['skipped']  = ['hc_big' => 'hc_big'];
+        $state['skipped']  = ['hc_big' => ['name' => 'hc_big', 'at' => '2026-10-17 10:01:00']];
 
         $zero = $this->icons($this->plugin(['check_unused' => 0], ['zerodates' => $state]))['plg_healthcheck_database_zerodates'];
 
         $this->assertStringContainsString('PLG_HEALTHCHECK_DATABASE_ZERODATES_SKIPPED', $zero['text']);
         $this->assertStringNotContainsString('PLG_HEALTHCHECK_DATABASE_ZERODATES_NONE', $zero['text']);
+
+        // A value cached by an older version (bare name) still counts.
+        $state['skipped'] = ['hc_big' => 'hc_big'];
+        $zero             = $this->icons($this->plugin(['check_unused' => 0], ['zerodates' => $state]))['plg_healthcheck_database_zerodates'];
+
+        $this->assertStringContainsString('PLG_HEALTHCHECK_DATABASE_ZERODATES_SKIPPED', $zero['text']);
     }
 
     #[TestDox('The zero-date progress result reports an error, which is never complete')]
@@ -698,25 +723,28 @@ class DatabaseTest extends UnitTestCase
         $state['tables'] = ['hc_a' => [], 'hc_b' => []];
         $state['cursor'] = 1;
 
-        $this->assertSame(['complete' => false, 'error' => false, 'checked' => 1, 'total' => 2], Database::progressResult($state));
+        $this->assertSame(['complete' => false, 'error' => false, 'checked' => 1, 'total' => 2, 'busy' => false], Database::progressResult($state));
 
         $state['error'] = ['table' => 'hc_b', 'at' => '2026-10-17 10:00:00'];
 
-        $this->assertSame(['complete' => false, 'error' => true, 'checked' => 1, 'total' => 2], Database::progressResult($state));
+        $this->assertSame(['complete' => false, 'error' => true, 'checked' => 1, 'total' => 2, 'busy' => false], Database::progressResult($state));
+        $this->assertTrue(Database::progressResult($state, true)['busy']);
     }
 
     #[TestDox('Zero-date details carry the skipped tables and the table that could not be checked')]
     public function testDetailsZeroDateNotes(): void
     {
         $state            = $this->zeroState(['hc_a' => ['created']]);
-        $state['skipped'] = ['hc_big' => 'HC_Big'];
+        $state['skipped'] = ['hc_big' => ['name' => 'HC_Big', 'at' => '2026-10-17 10:00:00'], 'hc_old' => 'HC_Old'];
         $state['error']   = ['table' => 'hc_b', 'at' => '2026-10-17 10:00:00'];
         $ignores          = new IgnoreList([]);
         $data             = ['groups' => [], 'findings' => ZeroDateScanner::findings($state, $ignores), 'ignores' => $ignores, 'state' => $state];
 
+        $this->assertSame(['HC_Big'], Database::detailsData('zerodates', $data, 'hc_big', false)['skipped']);
+
         $out = Database::detailsData('zerodates', $data, '', true);
 
-        $this->assertSame(['HC_Big'], $out['skipped']);
+        $this->assertSame(['HC_Big', 'HC_Old'], $out['skipped'], 'a bare name cached by an older version is still listed');
         $this->assertSame('hc_b', $out['error']);
 
         $html = Database::renderDetails(JPATH_ROOT . '/plugins/healthcheck/database/tmpl/details.php', $out);
@@ -811,5 +839,76 @@ class DatabaseTest extends UnitTestCase
 
         $my = $this->icons($this->plugin([], ['unused' => $unused]));
         $this->assertSame('PLG_HEALTHCHECK_DATABASE_CHECKNOW_TEXT', $my['plg_healthcheck_database_checknow']['text']);
+    }
+
+    /**
+     * A zero-date pass on hc_a, hc_b with the cursor on hc_b and its marker set $age seconds ago.
+     *
+     * @param   float  $age  Seconds since the marker was set
+     *
+     * @return  array
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    private function markedState(float $age): array
+    {
+        $state               = ZeroDateScanner::emptyState();
+        $state['pass']       = '2026-10-17 10:00:00';
+        $state['tables']     = [
+            'hc_a' => ['name' => 'hc_a', 'columns' => [['column' => 'created', 'type' => 'datetime']]],
+            'hc_b' => ['name' => 'hc_b', 'columns' => [['column' => 'created', 'type' => 'datetime']]],
+        ];
+        $state['cursor']     = 1;
+        $state['inprogress'] = ['key' => 'hc_b', 'at' => microtime(true) - $age];
+
+        return $state;
+    }
+
+    #[TestDox('A zero-date batch while another request counts the cursor table reports busy and stores nothing')]
+    public function testZeroDatesBusy(): void
+    {
+        $_SERVER['REQUEST_METHOD'] = 'POST';
+
+        foreach (['0', '1'] as $restart) {
+            $_POST         = ['restart' => $restart];
+            $this->stores  = 0;
+            $this->queries = 0;
+
+            $result = $this->ajaxResult(['input' => ['task' => 'zerodates'], 'cached' => ['zerodates' => $this->markedState(1)]]);
+
+            $this->assertSame(['complete' => false, 'error' => false, 'checked' => 1, 'total' => 2, 'busy' => true], $result, 'restart=' . $restart);
+            $this->assertSame(0, $this->stores, 'the other request\'s state is not overwritten');
+            $this->assertSame(0, $this->queries, 'nothing is scanned');
+        }
+    }
+
+    #[TestDox('A zero-date marker older than the dead-after time is a dead request: the batch runs and stores')]
+    public function testZeroDatesDeadMarkerRuns(): void
+    {
+        $_SERVER['REQUEST_METHOD'] = 'POST';
+        $_POST                     = ['restart' => '0'];
+
+        $result = $this->ajaxResult(['input' => ['task' => 'zerodates'], 'cached' => ['zerodates' => $this->markedState(100000)]]);
+
+        $this->assertFalse($result['busy']);
+        $this->assertSame(2, $result['checked'], 'the dead table is skipped');
+        $this->assertTrue($result['complete']);
+        $this->assertGreaterThan(0, $this->stores);
+    }
+
+    #[TestDox('A zero-date marker cached by an older version (bare key) is not taken as busy')]
+    public function testZeroDatesOldMarkerShape(): void
+    {
+        $_SERVER['REQUEST_METHOD'] = 'POST';
+        $_POST                     = ['restart' => '0'];
+        $state                     = $this->markedState(0);
+        $state['inprogress']       = 'hc_b';
+        $state['skipped']          = ['hc_b' => 'hc_b'];
+
+        $result = $this->ajaxResult(['input' => ['task' => 'zerodates'], 'cached' => ['zerodates' => $state]]);
+
+        $this->assertIsArray($result);
+        $this->assertFalse($result['busy']);
+        $this->assertGreaterThan(0, $this->stores);
     }
 }
