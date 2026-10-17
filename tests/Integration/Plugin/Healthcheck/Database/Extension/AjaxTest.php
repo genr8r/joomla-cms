@@ -400,6 +400,35 @@ class AjaxTest extends IntegrationTestCase implements DBTestInterface
         $this->assertSame($state, $this->store()->get('zerodates'));
     }
 
+    public function testZeroDatesRestartRightAfterDeathSkipsTable(): void
+    {
+        if (!$this->isMysql()) {
+            $this->markTestSkipped('Zero dates exist on MySQL/MariaDB only.');
+        }
+
+        foreach (['#__zd_a', '#__zd_b'] as $table) {
+            $this->exec('CREATE TABLE ' . $this->db->quoteName($table) . ' (created DATETIME NULL)');
+        }
+
+        $post = fn (string $restart, int $budget) => $this->ajax('POST', ['task' => 'zerodates'], ['restart' => $restart], ['params' => ['time_budget' => $budget]]);
+
+        // Check now's first batch, then its request for the second table dies.
+        $this->assertSame(['complete' => false, 'error' => false, 'checked' => 1, 'total' => 3, 'busy' => false], $post('1', 0));
+
+        $state               = $this->store()->get('zerodates');
+        $key                 = array_keys($state['tables'])[1];
+        $state['inprogress'] = ['key' => $key, 'at' => microtime(true) - 100000];
+        $this->store()->put('zerodates', $state);
+
+        // Check now again, with no restart=0 batch in between: the table it died on is skipped.
+        $this->assertSame(['complete' => true, 'error' => false, 'checked' => 3, 'total' => 3, 'busy' => false], $post('1', 20));
+
+        $state = $this->store()->get('zerodates');
+        $this->assertSame([$key], array_keys($state['skipped']));
+        $this->assertSame($this->db->getPrefix() . 'zd_a', $state['skipped'][$key]['name']);
+        $this->assertNull($state['inprogress']);
+    }
+
     public function testZeroDatesOffIsComplete(): void
     {
         $result = $this->ajax('POST', ['task' => 'zerodates'], [], ['params' => ['check_zerodates' => 0]]);

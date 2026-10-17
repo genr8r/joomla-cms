@@ -189,7 +189,7 @@ class ZeroDateScannerTest extends UnitTestCase
         $scanner = $this->scanner($this->catalog($zeros));
 
         $state = $scanner->run(ZeroDateScanner::emptyState(), 'hc_', 10, self::NOW, self::HOURS, self::DEAD);
-        $state = $scanner->start($state, 'hc_', self::NOW, self::HOURS);
+        $state = $scanner->start($state, 'hc_', self::NOW, self::HOURS, self::DEAD);
 
         $this->assertFalse($state['complete']);
         $this->assertSame(0, $state['cursor']);
@@ -208,7 +208,7 @@ class ZeroDateScannerTest extends UnitTestCase
         $state = $scanner->run(ZeroDateScanner::emptyState(), 'hc_', 10, self::NOW, self::HOURS, self::DEAD);
 
         $zeros['hc_a.created'] = 0;
-        $state                 = $scanner->run($scanner->start($state, 'hc_', self::NOW, self::HOURS), 'hc_', 10, self::NOW, self::HOURS, self::DEAD);
+        $state                 = $scanner->run($scanner->start($state, 'hc_', self::NOW, self::HOURS, self::DEAD), 'hc_', 10, self::NOW, self::HOURS, self::DEAD);
 
         $this->assertSame(['hc_c.day=1'], $this->open($state));
     }
@@ -239,7 +239,7 @@ class ZeroDateScannerTest extends UnitTestCase
         $this->assertArrayHasKey('hc_b', $state['results']);
 
         $fake['gone'] = ['hc_b'];
-        $state        = $scanner->run($scanner->start($state, 'hc_', self::NOW, self::HOURS), 'hc_', 10, self::NOW, self::HOURS, self::DEAD);
+        $state        = $scanner->run($scanner->start($state, 'hc_', self::NOW, self::HOURS, self::DEAD), 'hc_', 10, self::NOW, self::HOURS, self::DEAD);
 
         $this->assertArrayNotHasKey('hc_b', $state['results']);
     }
@@ -270,7 +270,7 @@ class ZeroDateScannerTest extends UnitTestCase
         $later          = '2026-10-17 11:00:00';
         $fake['broken'] = ['hc_b'];
         $fake['calls']  = [];
-        $state          = $scanner->run($scanner->start($state, 'hc_', $later, self::HOURS), 'hc_', 10, $later, self::HOURS, self::DEAD);
+        $state          = $scanner->run($scanner->start($state, 'hc_', $later, self::HOURS, self::DEAD), 'hc_', 10, $later, self::HOURS, self::DEAD);
 
         $this->assertFalse($state['complete']);
         $this->assertSame(self::NOW, $state['updated'], 'the last complete pass stays the reference');
@@ -324,7 +324,7 @@ class ZeroDateScannerTest extends UnitTestCase
         $scanner = $this->scanner($this->catalog($zeros, $fake));
 
         // A run that died while counting hc_b left this state behind, longer ago than DEAD.
-        $state               = $scanner->start(ZeroDateScanner::emptyState(), 'hc_', self::NOW, self::HOURS);
+        $state               = $scanner->start(ZeroDateScanner::emptyState(), 'hc_', self::NOW, self::HOURS, self::DEAD);
         $state['cursor']     = 1;
         $state['inprogress'] = ['key' => 'hc_b', 'at' => -1000.0];
 
@@ -345,7 +345,7 @@ class ZeroDateScannerTest extends UnitTestCase
         $fake    = [];
         $scanner = $this->scanner($this->catalog($zeros, $fake));
 
-        $state               = $scanner->start(ZeroDateScanner::emptyState(), 'hc_', self::NOW, self::HOURS);
+        $state               = $scanner->start(ZeroDateScanner::emptyState(), 'hc_', self::NOW, self::HOURS, self::DEAD);
         $state['cursor']     = 1;
         $state['inprogress'] = ['key' => 'hc_b', 'at' => 0.0];
 
@@ -388,7 +388,7 @@ class ZeroDateScannerTest extends UnitTestCase
             'hc_b' => ['name' => 'hc_b', 'at' => '2026-10-16 09:00:00'],
         ];
 
-        $state = $scanner->start($state, 'hc_', self::NOW, self::HOURS);
+        $state = $scanner->start($state, 'hc_', self::NOW, self::HOURS, self::DEAD);
 
         $this->assertSame(['hc_a' => ['name' => 'HC_A', 'at' => '2026-10-16 11:00:00']], $state['skipped']);
 
@@ -439,12 +439,44 @@ class ZeroDateScannerTest extends UnitTestCase
         // Check now: a new pass keeps hc_b skipped and completes without counting it.
         $later         = '2026-10-17 10:30:00';
         $fake['calls'] = [];
-        $state         = $scanner->run($scanner->start($state, 'hc_', $later, self::HOURS), 'hc_', 10, $later, self::HOURS, self::DEAD);
+        $state         = $scanner->run($scanner->start($state, 'hc_', $later, self::HOURS, self::DEAD), 'hc_', 10, $later, self::HOURS, self::DEAD);
 
         $this->assertTrue($state['complete']);
         $this->assertSame($later, $state['updated']);
         $this->assertSame(['hc_b'], array_keys($state['skipped']));
         $this->assertSame(['HC_A', 'hc_c'], array_column($fake['calls'], 0));
+    }
+
+    #[TestDox('Check now straight after a request died (no batch in between) skips the table it died on')]
+    public function testRestartOnDeadMarkerSkipsTable()
+    {
+        $zeros   = $this->zeros();
+        $fake    = [];
+        $scanner = $this->scanner($this->catalog($zeros, $fake));
+
+        // Check now died while counting hc_b: its marker is the last thing stored.
+        $died               = $scanner->start(ZeroDateScanner::emptyState(), 'hc_', self::NOW, self::HOURS, self::DEAD);
+        $died['cursor']     = 1;
+        $died['inprogress'] = ['key' => 'hc_b', 'at' => -1000.0];
+
+        // The next Check now restarts at once.
+        $later = '2026-10-17 10:10:00';
+        $state = $scanner->start($died, 'hc_', $later, self::HOURS, self::DEAD);
+
+        $this->assertSame(['hc_b' => ['name' => 'hc_b', 'at' => $later]], $state['skipped']);
+        $this->assertNull($state['inprogress']);
+        $this->assertSame(0, $state['cursor']);
+
+        $state = $scanner->run($state, 'hc_', 10, $later, self::HOURS, self::DEAD);
+
+        $this->assertTrue($state['complete']);
+        $this->assertSame(['HC_A', 'hc_c'], array_column($fake['calls'], 0));
+        $this->assertSame(['hc_b'], array_keys($state['skipped']));
+
+        // A live marker is not turned into a skip by start() (callers defer instead).
+        $live               = $died;
+        $live['inprogress'] = ['key' => 'hc_b', 'at' => 0.0];
+        $this->assertSame([], $scanner->start($live, 'hc_', $later, self::HOURS, self::DEAD)['skipped']);
     }
 
     #[TestDox('an Error that is not a RuntimeException is recorded like one and clears the marker')]
@@ -470,7 +502,7 @@ class ZeroDateScannerTest extends UnitTestCase
         $fake    = [];
         $scanner = $this->scanner($this->catalog($zeros, $fake));
 
-        $state               = $scanner->start(ZeroDateScanner::emptyState(), 'hc_', self::NOW, self::HOURS);
+        $state               = $scanner->start(ZeroDateScanner::emptyState(), 'hc_', self::NOW, self::HOURS, self::DEAD);
         $state['cursor']     = 1;
         $state['inprogress'] = 'hc_b';
         $state['skipped']    = ['hc_c' => 'hc_c'];
@@ -485,12 +517,12 @@ class ZeroDateScannerTest extends UnitTestCase
         $this->assertSame(['hc_c' => ['name' => 'hc_c', 'at' => null]], $state['skipped']);
 
         // Without a time it is retried on the next start.
-        $state            = $scanner->start($state, 'hc_', self::NOW, self::HOURS);
+        $state            = $scanner->start($state, 'hc_', self::NOW, self::HOURS, self::DEAD);
         $this->assertSame([], $state['skipped']);
 
-        $old              = $scanner->start(ZeroDateScanner::emptyState(), 'hc_', self::NOW, self::HOURS);
+        $old              = $scanner->start(ZeroDateScanner::emptyState(), 'hc_', self::NOW, self::HOURS, self::DEAD);
         $old['skipped']   = ['hc_c' => 'hc_c'];
-        $this->assertSame([], $scanner->start($old, 'hc_', self::NOW, self::HOURS)['skipped']);
+        $this->assertSame([], $scanner->start($old, 'hc_', self::NOW, self::HOURS, self::DEAD)['skipped']);
     }
 
     #[TestDox('a stale in-progress marker for another table is dropped')]
@@ -499,7 +531,7 @@ class ZeroDateScannerTest extends UnitTestCase
         $zeros   = $this->zeros();
         $scanner = $this->scanner($this->catalog($zeros));
 
-        $state               = $scanner->start(ZeroDateScanner::emptyState(), 'hc_', self::NOW, self::HOURS);
+        $state               = $scanner->start(ZeroDateScanner::emptyState(), 'hc_', self::NOW, self::HOURS, self::DEAD);
         $state['inprogress'] = ['key' => 'hc_c', 'at' => 0.0];
 
         $state = $scanner->run($state, 'hc_', 1, self::NOW, self::HOURS, self::DEAD);

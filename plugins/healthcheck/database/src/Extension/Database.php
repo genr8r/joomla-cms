@@ -430,7 +430,7 @@ final class Database extends CMSPlugin implements SubscriberInterface
 
         // A missing pass is started by run() itself.
         if ($started && $restart) {
-            $state = $scanner->start($state, $prefix, $now, $hours);
+            $state = $scanner->start($state, $prefix, $now, $hours, $deadAfter);
         }
 
         $state = $scanner->run($state, $prefix, $budget, $now, $hours, $deadAfter, fn (array $state) => $this->store->put('zerodates', $state));

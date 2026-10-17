@@ -70,6 +70,10 @@ final class ZeroDateScanner
      * Seconds after which an in-progress marker means its request died: the longest a request may run
      * (the time budget or PHP's time limit, 300 when that is unlimited) plus a margin.
      *
+     * This is a heuristic: on Linux max_execution_time does not count time spent waiting on the database, so
+     * a very long COUNT can be taken for dead while it is still running. That table then really is too large
+     * to check in one request.
+     *
      * @param   float    $budgetSeconds     Seconds a run may take
      * @param   integer  $maxExecutionTime  PHP's max_execution_time, 0 for unlimited
      *
@@ -103,20 +107,25 @@ final class ZeroDateScanner
     /**
      * Begin a new pass. Earlier results are kept until their tables are checked again. Tables skipped as too
      * large within the last $refreshHours stay skipped, so Check now does not die on them again; older ones
-     * are tried again.
+     * are tried again. A dead marker left by the old pass (callers check isBusy() first) is recorded in
+     * `skipped` before it is cleared, so a restart right after a request died does not count that table again.
      *
      * @param   array    $state         The state
      * @param   string   $tablePrefix   The site's table prefix
      * @param   string   $now           Current time (Y-m-d H:i:s, UTC)
      * @param   integer  $refreshHours  Hours a result stays fresh
+     * @param   float    $deadAfter     Seconds after which a marker means its request died
      *
      * @return  array
      *
      * @since   __DEPLOY_VERSION__
      */
-    public function start(array $state, string $tablePrefix, string $now, int $refreshHours): array
+    public function start(array $state, string $tablePrefix, string $now, int $refreshHours, float $deadAfter): array
     {
-        $tables = [];
+        // Named from the old pass, which the new one replaces below.
+        $dead     = $this->deadKey($state, $deadAfter);
+        $deadName = $dead === null ? null : (string) ($state['tables'][$dead]['name'] ?? $dead);
+        $tables   = [];
 
         foreach ($this->catalog->dateColumns($tablePrefix) as $column) {
             $key = strtolower($column['table']);
@@ -139,6 +148,11 @@ final class ZeroDateScanner
             static fn (array $entry): bool => !ResultStore::isStale($entry['at'], $refreshHours, $now)
         );
         $state['error']      = null;
+
+        if ($dead !== null) {
+            // The request that counted this table died: too large to check in one request.
+            $state['skipped'][$dead] = ['name' => $deadName, 'at' => $now];
+        }
 
         return $state;
     }
@@ -178,24 +192,22 @@ final class ZeroDateScanner
         ?\Closure $beforeTable = null
     ): array {
         if (($state['pass'] ?? null) === null) {
-            $state = $this->start($state, $tablePrefix, $now, $refreshHours);
+            $state = $this->start($state, $tablePrefix, $now, $refreshHours, $deadAfter);
         }
 
         $state += self::emptyState();
-        $began  = ($this->clock)();
 
-        if (self::isBusy($state, $began, $deadAfter)) {
+        if (self::isBusy($state, ($this->clock)(), $deadAfter)) {
             return $state;
         }
 
-        $state['skipped'] = self::skipped($state);
-        $keys             = array_keys($state['tables']);
-        $total            = \count($keys);
-
-        // Not busy: a marker on the cursor table is dead; any other marker (or an older shape) is left over.
-        $marker              = self::marker($state);
-        $dead                = $marker !== null && $marker['key'] === self::cursorKey($state);
+        // A marker on the cursor table is dead; any other marker (or an older shape) is left over.
+        $dead                = $this->deadKey($state, $deadAfter) !== null;
+        $state['skipped']    = self::skipped($state);
+        $keys                = array_keys($state['tables']);
+        $total               = \count($keys);
         $state['inprogress'] = null;
+        $began               = ($this->clock)();
 
         while ($state['cursor'] < $total) {
             $key   = $keys[$state['cursor']];
@@ -366,6 +378,27 @@ final class ZeroDateScanner
         }
 
         return ['key' => (string) $marker['key'], 'at' => (float) $marker['at']];
+    }
+
+    /**
+     * Key of the cursor table when its in-progress marker is dead (older than $deadAfter), otherwise null.
+     *
+     * @param   array  $state      The state
+     * @param   float  $deadAfter  Seconds after which a marker means its request died
+     *
+     * @return  ?string
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    private function deadKey(array $state, float $deadAfter): ?string
+    {
+        $marker = self::marker($state);
+
+        if ($marker === null || $marker['key'] !== self::cursorKey($state) || self::isBusy($state, ($this->clock)(), $deadAfter)) {
+            return null;
+        }
+
+        return $marker['key'];
     }
 
     /**
