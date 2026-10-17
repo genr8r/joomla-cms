@@ -331,6 +331,32 @@ class DatabaseTest extends UnitTestCase
         );
     }
 
+    #[TestDox('A complete zero-date pass shows the summary and exactly one relative Checked line')]
+    public function testZeroDatesComplete(): void
+    {
+        // Let the Checked string keep its placeholder so the formatted argument is visible.
+        $language = $this->createStub(Language::class);
+        $language->method('_')->willReturnCallback(
+            static fn ($key) => $key === 'PLG_HEALTHCHECK_DATABASE_ZERODATES_CHECKED' ? 'CHECKED %s' : $key
+        );
+        $language->method('getPluralSuffixes')->willReturn(['MORE']);
+        $language->method('hasKey')->willReturn(false);
+        Factory::$language = $language;
+
+        $state             = $this->zeroState(['hc_a' => ['created', 'modified']]);
+        $state['pass']     = '2026-10-17 10:00:00';
+        $state['updated']  = '2026-10-17 10:05:00';
+        $state['complete'] = true;
+
+        $icons = $this->icons($this->plugin(['check_unused' => 0], ['zerodates' => $state]));
+        $zero  = $icons['plg_healthcheck_database_zerodates'];
+
+        $this->assertSame('PLG_HEALTHCHECK_DATABASE_N_IN_M<br>CHECKED AGO(2026-10-17 10:05:00)', $zero['text']);
+        $this->assertStringNotContainsString('DATE(', $zero['text']);
+        $this->assertStringNotContainsString('PARTIAL', $zero['text']);
+        $this->assertSame(1, substr_count($zero['text'], 'CHECKED'));
+    }
+
     #[TestDox('With both checks off only the schema icon is shown')]
     public function testChecksOff(): void
     {
