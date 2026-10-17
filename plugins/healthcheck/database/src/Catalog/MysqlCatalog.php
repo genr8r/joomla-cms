@@ -10,7 +10,6 @@
 
 namespace Joomla\Plugin\Healthcheck\Database\Catalog;
 
-
 use Joomla\Database\DatabaseInterface;
 
 // phpcs:disable PSR1.Files.SideEffects

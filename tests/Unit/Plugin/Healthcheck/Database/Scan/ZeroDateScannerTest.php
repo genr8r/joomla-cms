@@ -191,9 +191,9 @@ class ZeroDateScannerTest extends UnitTestCase
     #[TestDox('a dropped table loses its earlier result')]
     public function testDroppedTableLosesResult()
     {
-        $zeros   = $this->zeros();
+        $zeros                  = $this->zeros();
         $zeros['hc_b.modified'] = 4;
-        $scanner = $this->scanner($this->catalog($zeros));
+        $scanner                = $this->scanner($this->catalog($zeros));
 
         $state = $scanner->run(ZeroDateScanner::emptyState(), 'hc_', 10, self::NOW);
         $this->assertArrayHasKey('hc_b', $state['results']);
@@ -211,7 +211,7 @@ class ZeroDateScannerTest extends UnitTestCase
         $scanner = $this->scanner($this->catalog($zeros));
 
         $state                       = ZeroDateScanner::emptyState();
-        $state['results']['hc_old'] = [
+        $state['results']['hc_old']  = [
             'table'   => 'hc_old',
             'checked' => '2026-10-01 00:00:00',
             'columns' => [['column' => 'x', 'type' => 'date', 'zero' => 5]],
