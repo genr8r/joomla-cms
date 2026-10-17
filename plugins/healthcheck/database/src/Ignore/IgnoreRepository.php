@@ -10,8 +10,8 @@
 
 namespace Joomla\Plugin\Healthcheck\Database\Ignore;
 
+use Joomla\CMS\Log\Log;
 use Joomla\Database\DatabaseInterface;
-use Joomla\Database\Exception\ExecutionFailureException;
 use Joomla\Database\ParameterType;
 
 // phpcs:disable PSR1.Files.SideEffects
@@ -94,12 +94,18 @@ final class IgnoreRepository
     /**
      * Add an entry. Adding an existing entry succeeds without changing it.
      *
+     * Names are compared byte for byte. When the database collation holds another name equal to this one
+     * (MySQL utf8mb4_unicode_ci: `cafe_log` and `café_log`), the UNIQUE key cannot take it: add() refuses
+     * rather than claim an entry it did not store.
+     *
      * @param   string  $kind    table, column or prefix
      * @param   string  $name    The name (table.column for a column); stored lowercased
      * @param   integer $userId  The user adding it
      * @param   string  $now     The creation date, UTC, Y-m-d H:i:s
      *
-     * @return  boolean  False for invalid input
+     * @return  boolean  False for invalid input, or when a collation-equal entry is in the way
+     *
+     * @throws  \RuntimeException  With a generic message when the entry cannot be stored; the detail is logged.
      *
      * @since   __DEPLOY_VERSION__
      */
@@ -111,8 +117,14 @@ final class IgnoreRepository
             return false;
         }
 
-        if ($this->exists($kind, $name)) {
+        $candidates = $this->candidates($kind, $name);
+
+        if (\in_array($name, $candidates, true)) {
             return true;
+        }
+
+        if ($candidates !== []) {
+            return false;
         }
 
         $db      = $this->db;
@@ -128,11 +140,26 @@ final class IgnoreRepository
 
         try {
             $db->setQuery($query)->execute();
-        } catch (ExecutionFailureException $e) {
-            // A concurrent request won the unique key: the entry is there, which is what was asked.
-            if (!$this->exists($kind, $name)) {
-                throw $e;
+        } catch (\RuntimeException $e) {
+            try {
+                $after = $this->candidates($kind, $name);
+            } catch (\RuntimeException) {
+                $after = [];
             }
+
+            // A concurrent request won the unique key: the entry is there, which is what was asked.
+            if (\in_array($name, $after, true)) {
+                return true;
+            }
+
+            if ($after !== []) {
+                return false;
+            }
+
+            // The driver message can name tables and SQL: log it, keep it out of the Ajax response.
+            Log::add('Database Health Check: could not store the ignore entry: ' . $e->getMessage(), Log::WARNING, 'healthcheck');
+
+            throw new \RuntimeException('Could not store the ignore entry', 500);
         }
 
         return true;
@@ -142,7 +169,7 @@ final class IgnoreRepository
      * Remove an entry.
      *
      * @param   string  $kind  table, column or prefix
-     * @param   string  $name  The name; matched lowercased
+     * @param   string  $name  The name; matched lowercased, byte for byte
      *
      * @return  boolean  True when a row was deleted
      *
@@ -150,14 +177,18 @@ final class IgnoreRepository
      */
     public function remove(string $kind, string $name): bool
     {
-        $name  = strtolower($name);
+        $name = strtolower($name);
+        $id   = array_search($name, $this->candidates($kind, $name), true);
+
+        if ($id === false) {
+            return false;
+        }
+
         $db    = $this->db;
         $query = $db->createQuery()
             ->delete($db->quoteName(self::TABLE))
-            ->where($db->quoteName('kind') . ' = :kind')
-            ->where($db->quoteName('name') . ' = :name')
-            ->bind(':kind', $kind)
-            ->bind(':name', $name);
+            ->where($db->quoteName('id') . ' = :id')
+            ->bind(':id', $id, ParameterType::INTEGER);
 
         $db->setQuery($query)->execute();
 
@@ -165,35 +196,43 @@ final class IgnoreRepository
     }
 
     /**
-     * Whether an entry exists.
+     * Entries of the kind whose name the database collation takes as equal to $name. The caller compares
+     * them byte for byte: a case- and accent-insensitive collation also returns `café_log` for `cafe_log`.
      *
      * @param   string  $kind  The kind
      * @param   string  $name  The lowercased name
      *
-     * @return  boolean
+     * @return  array<int, string>  Stored name by id
      *
      * @since   __DEPLOY_VERSION__
      */
-    private function exists(string $kind, string $name): bool
+    private function candidates(string $kind, string $name): array
     {
         $db    = $this->db;
         $query = $db->createQuery()
-            ->select($db->quoteName('id'))
+            ->select($db->quoteName(['id', 'name']))
             ->from($db->quoteName(self::TABLE))
             ->where($db->quoteName('kind') . ' = :kind')
             ->where($db->quoteName('name') . ' = :name')
             ->bind(':kind', $kind)
             ->bind(':name', $name);
 
-        return (bool) $db->setQuery($query, 0, 1)->loadResult();
+        $out = [];
+
+        foreach ($db->setQuery($query)->loadAssocList() ?: [] as $row) {
+            $out[(int) $row['id']] = (string) $row['name'];
+        }
+
+        return $out;
     }
 
     /**
      * Whether the kind and name are acceptable for an ignore entry. The Details popup uses it to offer
      * Ignore only where add() would accept it.
      *
-     * A table may hold any characters but control characters. A column is `table.column`, split on the last
-     * dot, both sides non-empty. A prefix ends with `_` and has no dot.
+     * A table may hold any characters but control characters, and no space at either end (MySQL names cannot
+     * end with one, and PAD SPACE collations would match `name ` to `name`). A column is `table.column`, split
+     * on the last dot, both sides non-empty. A prefix ends with `_` and has no dot.
      *
      * @param   string  $kind  The kind
      * @param   string  $name  The name
@@ -204,7 +243,7 @@ final class IgnoreRepository
      */
     public static function isValid(string $kind, string $name): bool
     {
-        if (!preg_match(self::NAME_PATTERN, $name)) {
+        if (!preg_match(self::NAME_PATTERN, $name) || trim($name) !== $name) {
             return false;
         }
 

@@ -116,4 +116,33 @@ class IgnoreRepositoryTest extends IntegrationTestCase implements DBTestInterfac
         $this->assertSame([], $this->repo->all());
         $this->assertFalse($this->repo->remove('table', 'hc_orphan'));
     }
+
+    public function testCollationEqualNamesAreKeptApart(): void
+    {
+        $mysql = $this->getDBDriver()->getServerType() === 'mysql';
+
+        $this->assertTrue($this->repo->add('table', 'café_log', 1, '2026-10-17 10:00:00'));
+
+        // utf8mb4_unicode_ci treats cafe_log as café_log: the UNIQUE key refuses it, and add() says so.
+        $this->assertSame(!$mysql, $this->repo->add('table', 'cafe_log', 1, '2026-10-17 10:00:00'));
+        $this->assertContains('café_log', array_column($this->repo->all(), 'name'));
+        $this->assertSame($mysql ? ['café_log'] : ['café_log', 'cafe_log'], array_column($this->repo->all(), 'name'));
+
+        // Reopen matches byte for byte: removing cafe_log never deletes café_log.
+        $this->assertSame(!$mysql, $this->repo->remove('table', 'cafe_log'));
+        $this->assertSame(['café_log'], array_column($this->repo->all(), 'name'));
+        $this->assertTrue($this->repo->remove('table', 'CAFé_log'));
+        $this->assertSame([], $this->repo->all());
+    }
+
+    public function testRemoveDeletesOnlyTheExactRow(): void
+    {
+        $this->repo->add('table', 'hc_a', 1, '2026-10-17 10:00:00');
+        $this->repo->add('column', 'hc_a.created', 1, '2026-10-17 10:00:00');
+        $this->repo->add('table', 'hc_b', 1, '2026-10-17 10:00:00');
+
+        $this->assertTrue($this->repo->remove('table', 'hc_a'));
+        $this->assertSame(['hc_a.created', 'hc_b'], array_column($this->repo->all(), 'name'));
+        $this->assertFalse($this->repo->add('table', 'hc_b ', 1, '2026-10-17 10:00:00'), 'trailing space is refused');
+    }
 }
