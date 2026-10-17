@@ -230,9 +230,10 @@ final class IgnoreRepository
      * Whether the kind and name are acceptable for an ignore entry. The Details popup uses it to offer
      * Ignore only where add() would accept it.
      *
-     * A table may hold any characters but control characters, and no space at either end (MySQL names cannot
-     * end with one, and PAD SPACE collations would match `name ` to `name`). A column is `table.column`, split
-     * on the last dot, both sides non-empty. A prefix ends with `_` and has no dot.
+     * A table may hold any characters but control characters, spaces at either end included (MySQL allows a
+     * leading one, PostgreSQL both; a PAD SPACE collation match is told apart byte for byte by add() and
+     * remove()). A column is `table.column`, split on the last dot, both sides non-empty. A prefix ends with
+     * `_` and has no dot.
      *
      * @param   string  $kind  The kind
      * @param   string  $name  The name
@@ -243,7 +244,7 @@ final class IgnoreRepository
      */
     public static function isValid(string $kind, string $name): bool
     {
-        if (!preg_match(self::NAME_PATTERN, $name) || trim($name) !== $name) {
+        if (!preg_match(self::NAME_PATTERN, $name)) {
             return false;
         }
 

@@ -47,12 +47,12 @@ class IgnoreRepositoryTest extends UnitTestCase
         }
     }
 
-    #[TestDox('names with leading or trailing spaces are refused')]
-    public function testSpacesAroundNamesAreInvalid(): void
+    #[TestDox('names with spaces, also at either end, are valid (MySQL allows a leading space, PostgreSQL both)')]
+    public function testSpacesAroundNamesAreValid(): void
     {
-        $this->assertFalse(IgnoreRepository::isValid('table', 'hc_orphan '));
-        $this->assertFalse(IgnoreRepository::isValid('table', ' hc_orphan'));
-        $this->assertFalse(IgnoreRepository::isValid('column', 'hc_orphan.created '));
+        $this->assertTrue(IgnoreRepository::isValid('table', ' old_users'));
+        $this->assertTrue(IgnoreRepository::isValid('table', 'hc_orphan '));
+        $this->assertTrue(IgnoreRepository::isValid('column', ' old_users.created'));
         $this->assertTrue(IgnoreRepository::isValid('table', 'hc_my table'));
     }
 }

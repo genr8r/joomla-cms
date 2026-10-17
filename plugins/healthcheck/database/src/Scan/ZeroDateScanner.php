@@ -46,7 +46,7 @@ final class ZeroDateScanner
      * `inprogress` is the table being counted right now ({key, at}, `at` from the scanner's clock) or null,
      * `skipped` the tables not counted (key => {name, at, reason}: `at` Y-m-d H:i:s UTC, or null for an entry
      * cached by an older version; `reason` `large` when a request died on it, `name` when its name or a date
-     * column name holds `#__`), and `error` the table the last run could not check ({table, at}) or null.
+     * column name cannot be put in a query, see start()), and `error` the table the last run could not check ({table, at}) or null.
      *
      * @return  array
      *
@@ -111,10 +111,11 @@ final class ZeroDateScanner
      * are tried again. A dead marker left by the old pass (callers check isBusy() first) is recorded in
      * `skipped` before it is cleared, so a restart right after a request died does not count that table again.
      *
-     * A table whose name or a date column name holds `#__` is skipped for its name (and its old result
-     * dropped): the database driver replaces `#__` with the site prefix anywhere outside string literals, even
-     * inside a quoted identifier, so the count would read another table or fail. These entries are rebuilt on
-     * every start.
+     * A table whose name or a date column name holds `#__` or a colon followed by a letter, digit or
+     * underscore is skipped for its name (and its old result dropped): the database driver replaces `#__` with
+     * the site prefix, and the mysqli statement turns `:name` into a `?` placeholder, anywhere outside string
+     * literals, even inside a quoted identifier. The count would read another table or fail on every pass.
+     * These entries are rebuilt on every start.
      *
      * @param   array    $state         The state
      * @param   string   $tablePrefix   The site's table prefix
@@ -140,7 +141,7 @@ final class ZeroDateScanner
             $tables[$key]['name']      = $tables[$key]['name'] ?? $column['table'];
             $tables[$key]['columns'][] = ['column' => $column['column'], 'type' => $column['type']];
 
-            if (str_contains($column['table'], '#__') || str_contains($column['column'], '#__')) {
+            if (self::unqueryable($column['table']) || self::unqueryable($column['column'])) {
                 $byName[$key] = true;
             }
         }
@@ -403,6 +404,21 @@ final class ZeroDateScanner
         }
 
         return ['key' => (string) $marker['key'], 'at' => (float) $marker['at']];
+    }
+
+    /**
+     * Whether a name cannot be put in a query as an identifier: the driver would rewrite its `#__` or a
+     * `:placeholder` in it.
+     *
+     * @param   string  $name  A table or column name
+     *
+     * @return  boolean
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    private static function unqueryable(string $name): bool
+    {
+        return str_contains($name, '#__') || preg_match('/:[A-Za-z0-9_]/', $name) === 1;
     }
 
     /**

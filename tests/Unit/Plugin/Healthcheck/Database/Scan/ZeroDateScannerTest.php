@@ -509,7 +509,7 @@ class ZeroDateScannerTest extends UnitTestCase
         $this->assertNull($state['inprogress']);
     }
 
-    #[TestDox('a table or date column whose name holds #__ is never counted and is listed as skipped for its name')]
+    #[TestDox('a table or date column whose name holds #__ or a :placeholder is never counted and is skipped for its name')]
     public function testHashPrefixNamesAreSkipped()
     {
         $zeros           = $this->zeros();
@@ -518,6 +518,9 @@ class ZeroDateScannerTest extends UnitTestCase
             ['table' => 'hc_old#__users', 'column' => 'created', 'type' => 'datetime'],
             ['table' => 'hc_c', 'column' => 'day', 'type' => 'date'],
             ['table' => 'hc_c', 'column' => 'x#__y', 'type' => 'date'],
+            ['table' => 'hc_log:2020', 'column' => 'created', 'type' => 'datetime'],
+            ['table' => 'hc_d', 'column' => 'at:_x', 'type' => 'date'],
+            ['table' => 'hc_e', 'column' => 'a: b', 'type' => 'date'],
         ]];
         $scanner                  = $this->scanner($this->catalog($zeros, $fake));
         $state                    = ZeroDateScanner::emptyState();
@@ -528,6 +531,8 @@ class ZeroDateScannerTest extends UnitTestCase
         $this->assertSame(
             [
                 'hc_c'           => ['name' => 'hc_c', 'at' => self::NOW, 'reason' => 'name'],
+                'hc_d'           => ['name' => 'hc_d', 'at' => self::NOW, 'reason' => 'name'],
+                'hc_log:2020'    => ['name' => 'hc_log:2020', 'at' => self::NOW, 'reason' => 'name'],
                 'hc_old#__users' => ['name' => 'hc_old#__users', 'at' => self::NOW, 'reason' => 'name'],
             ],
             $state['skipped']
@@ -537,8 +542,9 @@ class ZeroDateScannerTest extends UnitTestCase
         $state = $scanner->run($state, 'hc_', 10, self::NOW, self::HOURS, self::DEAD);
 
         $this->assertTrue($state['complete']);
-        $this->assertSame(['hc_a'], array_column($fake['calls'], 0));
-        $this->assertSame(['hc_c', 'hc_old#__users'], array_keys($state['skipped']));
+        // A colon not followed by a letter, digit or underscore is not a placeholder: hc_e is counted.
+        $this->assertSame(['hc_a', 'hc_e'], array_column($fake['calls'], 0));
+        $this->assertSame(['hc_c', 'hc_d', 'hc_log:2020', 'hc_old#__users'], array_keys($state['skipped']));
 
         // Rebuilt on every start: never retried as a count, never kept once the name is gone.
         $later           = '2026-10-20 10:00:00';

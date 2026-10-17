@@ -143,6 +143,22 @@ class IgnoreRepositoryTest extends IntegrationTestCase implements DBTestInterfac
 
         $this->assertTrue($this->repo->remove('table', 'hc_a'));
         $this->assertSame(['hc_a.created', 'hc_b'], array_column($this->repo->all(), 'name'));
-        $this->assertFalse($this->repo->add('table', 'hc_b ', 1, '2026-10-17 10:00:00'), 'trailing space is refused');
+    }
+
+    public function testPadSpaceNamesAreKeptApart(): void
+    {
+        $mysql = $this->getDBDriver()->getServerType() === 'mysql';
+
+        $this->assertTrue($this->repo->add('table', 'hc_b', 1, '2026-10-17 10:00:00'));
+
+        // PAD SPACE collations take `hc_b ` as `hc_b`: refused, and Reopen of `hc_b ` leaves `hc_b` alone.
+        $this->assertSame(!$mysql, $this->repo->add('table', 'hc_b ', 1, '2026-10-17 10:00:00'));
+        $this->assertSame(!$mysql, $this->repo->remove('table', 'hc_b '));
+        $this->assertSame(['hc_b'], array_column($this->repo->all(), 'name'));
+
+        // A leading space is a different name everywhere.
+        $this->assertTrue($this->repo->add('table', ' old_users', 1, '2026-10-17 10:00:00'));
+        $this->assertTrue($this->repo->remove('table', ' old_users'));
+        $this->assertSame(['hc_b'], array_column($this->repo->all(), 'name'));
     }
 }

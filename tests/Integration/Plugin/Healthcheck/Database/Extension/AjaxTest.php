@@ -467,6 +467,7 @@ class AjaxTest extends IntegrationTestCase implements DBTestInterface
         $prefix = $this->db->getPrefix();
         $dotted = $prefix . 'zd_dot.ted';
         $hash   = $prefix . 'zd_#__x';
+        $colon  = $prefix . 'zd_log:2020';
         $mode   = (string) $this->db->setQuery('SELECT @@SESSION.sql_mode')->loadResult();
 
         $this->raw("SET SESSION sql_mode = ''");
@@ -476,6 +477,7 @@ class AjaxTest extends IntegrationTestCase implements DBTestInterface
             $this->raw('INSERT INTO `' . $dotted . "` (`c.d`) VALUES ('0000-00-00 00:00:00'), (NULL)");
             $this->raw('CREATE TABLE `' . $hash . '` (created DATETIME NULL)');
             $this->raw('INSERT INTO `' . $hash . "` (created) VALUES ('0000-00-00 00:00:00')");
+            $this->raw('CREATE TABLE `' . $colon . '` (created DATETIME NULL)');
         } finally {
             $this->raw('SET SESSION sql_mode = ' . $this->db->quote($mode));
         }
@@ -493,6 +495,9 @@ class AjaxTest extends IntegrationTestCase implements DBTestInterface
         // The #__ name is never counted: listed as skipped for its name.
         $this->assertSame(['name' => $hash, 'at' => $state['skipped'][strtolower($hash)]['at'], 'reason' => 'name'], $state['skipped'][strtolower($hash)]);
         $this->assertArrayNotHasKey(strtolower($hash), $state['results']);
+
+        // So is a name the statement layer would take for a :placeholder.
+        $this->assertSame('name', $state['skipped'][strtolower($colon)]['reason']);
 
         $html = $this->ajax('GET', ['task' => 'details', 'kind' => 'zerodates', 'key' => 'all', 'all' => '1'])['html'];
         $this->assertStringContainsString('PLG_HEALTHCHECK_DATABASE_DETAILS_NAME_SKIPPED', $html);
