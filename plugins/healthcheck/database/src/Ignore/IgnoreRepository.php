@@ -92,7 +92,7 @@ final class IgnoreRepository
     {
         $name = strtolower($name);
 
-        if (!$this->isValid($kind, $name)) {
+        if (!self::isValid($kind, $name)) {
             return false;
         }
 
@@ -174,16 +174,17 @@ final class IgnoreRepository
     }
 
     /**
-     * Whether the kind and (lowercased) name are acceptable.
+     * Whether the kind and name are acceptable for an ignore entry. The Details popup uses it to offer
+     * Ignore only where add() would accept it.
      *
      * @param   string  $kind  The kind
-     * @param   string  $name  The lowercased name
+     * @param   string  $name  The name
      *
      * @return  boolean
      *
      * @since   __DEPLOY_VERSION__
      */
-    private function isValid(string $kind, string $name): bool
+    public static function isValid(string $kind, string $name): bool
     {
         if (!preg_match(self::NAME_PATTERN, $name)) {
             return false;

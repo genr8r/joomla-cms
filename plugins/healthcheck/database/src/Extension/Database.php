@@ -16,6 +16,7 @@ use Joomla\CMS\HTML\HTMLHelper;
 use Joomla\CMS\Language\Text;
 use Joomla\CMS\Log\Log;
 use Joomla\CMS\Plugin\CMSPlugin;
+use Joomla\CMS\Plugin\PluginHelper;
 use Joomla\CMS\Session\Session;
 use Joomla\Database\DatabaseAwareTrait;
 use Joomla\Database\ParameterType;
@@ -54,10 +55,12 @@ final class Database extends CMSPlugin implements SubscriberInterface
     private const SCRIPT_STRINGS = [
         'JCLOSE',
         'PLG_HEALTHCHECK_DATABASE_CHECKNOW_DONE',
+        'PLG_HEALTHCHECK_DATABASE_CHECKNOW_FAILED',
         'PLG_HEALTHCHECK_DATABASE_CHECKNOW_PROGRESS',
         'PLG_HEALTHCHECK_DATABASE_CHECKNOW_STARTING',
-        'PLG_HEALTHCHECK_DATABASE_DETAILS_TITLE',
         'PLG_HEALTHCHECK_DATABASE_REQUEST_FAILED',
+        'PLG_HEALTHCHECK_DATABASE_UNUSED_NAME',
+        'PLG_HEALTHCHECK_DATABASE_ZERODATES_NAME',
     ];
 
     /**
@@ -357,14 +360,256 @@ final class Database extends CMSPlugin implements SubscriberInterface
     private function ajaxHandlers(): array
     {
         return [
-            'schema' => [false, fn (Input $input): array => $this->schemaResult()],
+            'schema'    => [false, fn (Input $input): array => $this->schemaResult()],
+            'zerodates' => [true, fn (Input $input): array => $this->zeroDatesTask($input->post->getInt('restart', 0) === 1)],
+            'unused'    => [true, fn (Input $input): array => $this->unusedTask()],
+            'details'   => [false, fn (Input $input): array => $this->detailsTask($input)],
+            'ignore'    => [true, fn (Input $input): array => $this->ignoreTask($input, true)],
+            'reopen'    => [true, fn (Input $input): array => $this->ignoreTask($input, false)],
         ];
+    }
+
+    /**
+     * Run one zero-date batch within the time budget.
+     *
+     * A new pass starts when asked to, or when the last pass is complete and stale. A complete pass that is
+     * still fresh is returned as is, without scanning (ZeroDateScanner::run() would only touch its time).
+     *
+     * @param   boolean  $restart  Start a new pass from the first table
+     *
+     * @return  array{complete:bool, checked:int, total:int}
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    private function zeroDatesTask(bool $restart): array
+    {
+        $db      = $this->getDatabase();
+        $catalog = CatalogFactory::for($db);
+
+        if (!$this->params->get('check_zerodates', 1) || !$catalog->supportsZeroDates()) {
+            return ['complete' => true, 'checked' => 0, 'total' => 0];
+        }
+
+        $now     = (new Date())->toSql();
+        $prefix  = $db->getPrefix();
+        $scanner = new ZeroDateScanner($catalog, static fn (): float => microtime(true));
+        $state   = $this->store->get('zerodates') ?? ZeroDateScanner::emptyState();
+        $started = ($state['pass'] ?? null) !== null;
+
+        if ($started && !$restart && !empty($state['complete'])) {
+            if (!ResultStore::isStale($state['updated'] ?? null, $this->refreshHours(), $now)) {
+                return self::progressResult($state);
+            }
+
+            $restart = true;
+        }
+
+        // A missing pass is started by run() itself.
+        if ($started && $restart) {
+            $state = $scanner->start($state, $prefix, $now);
+        }
+
+        $budget = (float) max(0, min(20, (int) $this->params->get('time_budget', 5)));
+        $state  = $scanner->run($state, $prefix, $budget, $now);
+
+        $this->store->put('zerodates', $state);
+
+        return self::progressResult($state);
+    }
+
+    /**
+     * @param   array  $state  Zero-date scanner state
+     *
+     * @return  array{complete:bool, checked:int, total:int}
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    private static function progressResult(array $state): array
+    {
+        return ['complete' => !empty($state['complete'])] + ZeroDateScanner::progress($state);
+    }
+
+    /**
+     * Rebuild the unused-table data now.
+     *
+     * @return  array{ok:bool}
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    private function unusedTask(): array
+    {
+        if (!$this->params->get('check_unused', 1)) {
+            return ['ok' => false];
+        }
+
+        $this->refreshUnused(CatalogFactory::for($this->getDatabase()), (new Date())->toSql());
+
+        return ['ok' => true];
+    }
+
+    /**
+     * The Details popup for one prefix group or table, or for every finding of a kind with `all=1`.
+     *
+     * @param   Input  $input  The request
+     *
+     * @return  array{html:string}
+     *
+     * @throws  \RuntimeException  On an unknown kind (400)
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    private function detailsTask(Input $input): array
+    {
+        $kind = (string) $input->getCmd('kind');
+
+        if (!\in_array($kind, ['unused', 'zerodates'], true)) {
+            throw new \RuntimeException('Unknown kind', 400);
+        }
+
+        $key = $input->get('key', '', 'raw');
+        $key = \is_string($key) ? $key : '';
+        $all = $input->getInt('all', 0) === 1;
+
+        return ['html' => self::renderDetails(
+            PluginHelper::getLayoutPath('healthcheck', 'database', 'details'),
+            self::detailsData($kind, $this->data(), $key, $all)
+        )];
+    }
+
+    /**
+     * What the Details popup shows: the matching unused-table groups or zero-date findings, open rows first.
+     *
+     * Each table and column gets a state: `open`, `ignored` (an entry of its own) or `prefix` (ignored only
+     * through an Ignore all of its group).
+     *
+     * @param   string   $kind  `unused` or `zerodates`
+     * @param   array    $data  Data for this request (groups, findings, ignores)
+     * @param   string   $key   Prefix of the group, or table name, compared case-insensitively
+     * @param   boolean  $all   Everything of that kind; the key is then ignored
+     *
+     * @return  array  Display data for tmpl/details.php
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    public static function detailsData(string $kind, array $data, string $key, bool $all): array
+    {
+        $key       = strtolower($key);
+        $ignores   = $data['ignores'];
+        $openFirst = static fn (array $a, array $b): int => ($a['state'] !== 'open') <=> ($b['state'] !== 'open');
+
+        if ($kind === 'zerodates') {
+            $findings = [];
+
+            foreach ($data['findings'] as $finding) {
+                if ($all || strtolower($finding['table']) === $key) {
+                    $findings[] = $finding + ['state' => $finding['ignored'] ? 'ignored' : 'open'];
+                }
+            }
+
+            usort($findings, $openFirst);
+
+            return ['kind' => $kind, 'findings' => $findings];
+        }
+
+        $groups = [];
+
+        foreach ($data['groups'] as $group) {
+            // With an empty site prefix every table is in the own group, whose prefix is then '' too.
+            if (!$all && strtolower($group['prefix']) !== $key) {
+                continue;
+            }
+
+            foreach ($group['tables'] as &$table) {
+                $table['state'] = match (true) {
+                    $ignores->hasTableEntry($table['name']) => 'ignored',
+                    $group['prefixIgnored']                 => 'prefix',
+                    default                                 => 'open',
+                };
+            }
+
+            unset($table);
+            usort($group['tables'], $openFirst);
+
+            $group['open'] = $group['tables'] !== [] && $group['tables'][0]['state'] === 'open';
+            $groups[]      = $group;
+        }
+
+        usort($groups, static fn (array $a, array $b): int => $b['open'] <=> $a['open']);
+
+        return ['kind' => $kind, 'groups' => $groups];
+    }
+
+    /**
+     * Render the details layout.
+     *
+     * @param   string  $layout       Path of the layout file
+     * @param   array   $displayData  The result of detailsData()
+     *
+     * @return  string
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    public static function renderDetails(string $layout, array $displayData): string
+    {
+        ob_start();
+
+        try {
+            include $layout;
+        } finally {
+            $html = (string) ob_get_clean();
+        }
+
+        return $html;
+    }
+
+    /**
+     * Ignore or Reopen a table, a column or a prefix. Counts follow at read time; nothing is rescanned.
+     *
+     * @param   Input    $input  The request
+     * @param   boolean  $add    Ignore (true) or Reopen (false)
+     *
+     * @return  array{ok:bool}
+     *
+     * @throws  \RuntimeException  On an unknown kind or an Ignore all of the site's own prefix (400)
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    private function ignoreTask(Input $input, bool $add): array
+    {
+        $kind = (string) $input->post->getCmd('kind');
+        $name = $input->post->get('name', '', 'raw');
+
+        if (!\in_array($kind, ['table', 'column', 'prefix'], true) || !\is_string($name)) {
+            throw new \RuntimeException('Invalid ignore entry', 400);
+        }
+
+        if ($add && $kind === 'prefix' && strtolower($name) === strtolower($this->getDatabase()->getPrefix())) {
+            throw new \RuntimeException('The site prefix cannot be ignored', 400);
+        }
+
+        if (!$add) {
+            return ['ok' => $this->ignores->remove($kind, $name)];
+        }
+
+        return ['ok' => $this->ignores->add($kind, $name, (int) $this->getApplication()->getIdentity()->id, (new Date())->toSql())];
+    }
+
+    /**
+     * Hours a stored result stays fresh.
+     *
+     * @return  integer
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    private function refreshHours(): int
+    {
+        return max(1, min(168, (int) $this->params->get('refresh_hours', 24)));
     }
 
     /**
      * Extensions with database update problems, from core's own check in Extensions > Database.
      *
-     * @return  array{amount:int, status:string, problems:int, extensions:int, text:string}
+     * @return  array{amount:int, status:string, problems:int, extensions:int, text:string, label:string}
      *
      * @since   __DEPLOY_VERSION__
      */
@@ -381,7 +626,8 @@ final class Database extends CMSPlugin implements SubscriberInterface
      *
      * @param   array  $items  Items with an errorsCount key
      *
-     * @return  array{amount:int, status:string, problems:int, extensions:int, text:string}
+     * @return  array{amount:int, status:string, problems:int, extensions:int, text:string, label:string}
+     *          `text` is escaped HTML, `label` the same as plain text for textContent
      *
      * @since   __DEPLOY_VERSION__
      */
@@ -412,6 +658,7 @@ final class Database extends CMSPlugin implements SubscriberInterface
             'problems'   => $problems,
             'extensions' => \count($items),
             'text'       => self::escape($text),
+            'label'      => $text,
         ];
     }
 
@@ -474,7 +721,7 @@ final class Database extends CMSPlugin implements SubscriberInterface
 
         $db    = $this->getDatabase();
         $now   = (new Date())->toSql();
-        $hours = max(1, min(168, (int) $this->params->get('refresh_hours', 24)));
+        $hours = $this->refreshHours();
 
         $data = [
             'prefix'     => $db->getPrefix(),
@@ -653,7 +900,7 @@ final class Database extends CMSPlugin implements SubscriberInterface
     }
 
     /**
-     * Add the script options and strings to the page, once. The admin script itself is added by the asset (Task 7).
+     * Add the admin script, its options and strings to the page, once.
      *
      * @param   array  $data  Data for this request
      *
@@ -672,6 +919,12 @@ final class Database extends CMSPlugin implements SubscriberInterface
 
         if (!$document) {
             return;
+        }
+
+        if (method_exists($document, 'getWebAssetManager')) {
+            $wa = $document->getWebAssetManager();
+            $wa->getRegistry()->addExtensionRegistryFile('plg_healthcheck_database');
+            $wa->useScript('plg_healthcheck_database.admin');
         }
 
         $document->addScriptOptions('plg_healthcheck_database', [

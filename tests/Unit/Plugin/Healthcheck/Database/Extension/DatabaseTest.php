@@ -50,11 +50,18 @@ class DatabaseTest extends UnitTestCase
      */
     private array $get = [];
 
+    /**
+     * @var    string|null  REQUEST_METHOD before the test
+     * @since  __DEPLOY_VERSION__
+     */
+    private ?string $method = null;
+
     protected function setUp(): void
     {
         parent::setUp();
 
-        $this->get = $_GET;
+        $this->get    = $_GET;
+        $this->method = $_SERVER['REQUEST_METHOD'] ?? null;
 
         $language = $this->createStub(Language::class);
         $language->method('_')->willReturnArgument(0);
@@ -71,6 +78,12 @@ class DatabaseTest extends UnitTestCase
         Factory::$language    = null;
         Factory::$application = null;
         $_GET                 = $this->get;
+
+        if ($this->method === null) {
+            unset($_SERVER['REQUEST_METHOD']);
+        } else {
+            $_SERVER['REQUEST_METHOD'] = $this->method;
+        }
 
         parent::tearDown();
     }
@@ -351,12 +364,12 @@ class DatabaseTest extends UnitTestCase
         $this->english();
 
         $this->assertSame(
-            ['amount' => 2, 'status' => 'warning', 'problems' => 3, 'extensions' => 3, 'text' => '3 problems in 2 extensions'],
+            ['amount' => 2, 'status' => 'warning', 'problems' => 3, 'extensions' => 3, 'text' => '3 problems in 2 extensions', 'label' => '3 problems in 2 extensions'],
             Database::schemaSummary([['errorsCount' => 2], ['errorsCount' => 0], ['errorsCount' => 1]])
         );
         $this->assertSame('1 problem in 1 extension', Database::schemaSummary([['errorsCount' => 1]])['text']);
         $this->assertSame(
-            ['amount' => 0, 'status' => 'success', 'problems' => 0, 'extensions' => 4, 'text' => 'All 4 extensions match their schema'],
+            ['amount' => 0, 'status' => 'success', 'problems' => 0, 'extensions' => 4, 'text' => 'All 4 extensions match their schema', 'label' => 'All 4 extensions match their schema'],
             Database::schemaSummary(array_fill(0, 4, ['errorsCount' => 0]))
         );
         $this->assertSame('1 extension matches its schema', Database::schemaSummary([['errorsCount' => 0]])['text']);
@@ -433,6 +446,110 @@ class DatabaseTest extends UnitTestCase
         $this->assertSame(403, $this->ajaxCode($task + ['admin' => false]));
         $this->assertSame(403, $this->ajaxCode($task + ['client' => 'site']));
         $this->assertSame(400, $this->ajaxCode($task));
+    }
+
+    #[TestDox('Scanning and writing tasks refuse GET with 405, before doing anything')]
+    public function testPostOnlyTasks(): void
+    {
+        $_SERVER['REQUEST_METHOD'] = 'GET';
+
+        foreach (['zerodates', 'unused', 'ignore', 'reopen'] as $task) {
+            $this->assertSame(405, $this->ajaxCode(['input' => ['task' => $task]]), $task);
+        }
+
+        $this->assertSame(403, $this->ajaxCode(['input' => ['task' => 'ignore'], 'admin' => false]));
+    }
+
+    #[TestDox('The schema result also carries plain text, escaped only in text')]
+    public function testSchemaLabelIsPlain(): void
+    {
+        $language = $this->createStub(Language::class);
+        $language->method('_')->willReturn("<b>'%d'");
+        $language->method('getPluralSuffixes')->willReturn(['MORE']);
+        $language->method('hasKey')->willReturn(false);
+        Factory::$language = $language;
+
+        $summary = Database::schemaSummary([]);
+
+        $this->assertSame("<b>'0'", $summary['label']);
+        $this->assertSame('&lt;b&gt;&#039;0&#039;', $summary['text']);
+    }
+
+    /**
+     * Request data for detailsData().
+     *
+     * @param   array  $groups   The result of UnusedTables::groups()
+     * @param   array  $ignores  Ignore entries
+     *
+     * @return  array
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    private function detailsInput(array $groups, array $ignores = []): array
+    {
+        return ['groups' => $groups, 'findings' => [], 'ignores' => new IgnoreList($ignores)];
+    }
+
+    #[TestDox('Details pick the group by prefix, case-insensitively, or every group with all')]
+    public function testDetailsGroups(): void
+    {
+        $ignores = new IgnoreList([]);
+        $groups  = UnusedTables::groups($this->tables(['hc_orphan', 'kiufs_content', 'nounderscore']), [], 'hc_', $ignores);
+        $data    = $this->detailsInput($groups);
+        $prefix  = static fn (array $out): array => array_column($out['groups'], 'prefix');
+
+        $this->assertSame(['hc_'], $prefix(Database::detailsData('unused', $data, 'HC_', false)));
+        $this->assertSame(['kiufs_'], $prefix(Database::detailsData('unused', $data, 'kiufs_', false)));
+        $this->assertSame([''], $prefix(Database::detailsData('unused', $data, '', false)));
+        $this->assertSame([], $prefix(Database::detailsData('unused', $data, 'nope_', false)));
+        $this->assertSame(['hc_', '', 'kiufs_'], $prefix(Database::detailsData('unused', $data, 'ignored', true)));
+    }
+
+    #[TestDox('With an empty site prefix, the empty key is the own group')]
+    public function testDetailsEmptySitePrefix(): void
+    {
+        $groups = UnusedTables::groups($this->tables(['orphan', 'kiufs_content']), [], '', new IgnoreList([]));
+        $out    = Database::detailsData('unused', $this->detailsInput($groups), '', false);
+
+        $this->assertCount(1, $out['groups']);
+        $this->assertTrue($out['groups'][0]['own']);
+        $this->assertSame(['kiufs_content', 'orphan'], array_column($out['groups'][0]['tables'], 'name'));
+    }
+
+    #[TestDox('Details mark table states, keep table entries under Ignore all, and list open rows first')]
+    public function testDetailsStates(): void
+    {
+        $entries = [
+            ['kind' => 'table', 'name' => 'hc_a'],
+            ['kind' => 'prefix', 'name' => 'kiufs_'],
+            ['kind' => 'table', 'name' => 'kiufs_b'],
+        ];
+        $ignores = new IgnoreList($entries);
+        $groups  = UnusedTables::groups($this->tables(['hc_a', 'hc_b', 'kiufs_a', 'kiufs_b', 'old_x']), [], 'hc_', $ignores);
+        $out     = Database::detailsData('unused', $this->detailsInput($groups, $entries), '', true);
+        $states  = array_map(
+            static fn (array $group): array => array_column($group['tables'], 'state', 'name'),
+            array_column($out['groups'], null, 'prefix')
+        );
+
+        $this->assertSame(['hc_', 'old_', 'kiufs_'], array_column($out['groups'], 'prefix'));
+        $this->assertSame(['hc_b' => 'open', 'hc_a' => 'ignored'], $states['hc_']);
+        $this->assertSame(['kiufs_a' => 'prefix', 'kiufs_b' => 'ignored'], $states['kiufs_']);
+        $this->assertSame(['old_x' => 'open'], $states['old_']);
+    }
+
+    #[TestDox('Zero-date details pick the table, case-insensitively, open columns first')]
+    public function testDetailsZeroDates(): void
+    {
+        $ignores  = new IgnoreList([['kind' => 'column', 'name' => 'hc_a.created']]);
+        $findings = ZeroDateScanner::findings($this->zeroState(['hc_a' => ['created', 'modified'], 'hc_b' => ['x']]), $ignores);
+        $data     = ['groups' => [], 'findings' => $findings, 'ignores' => $ignores];
+
+        $one = Database::detailsData('zerodates', $data, 'HC_A', false)['findings'];
+        $this->assertSame(['modified', 'created'], array_column($one, 'column'));
+        $this->assertSame(['open', 'ignored'], array_column($one, 'state'));
+        $this->assertCount(3, Database::detailsData('zerodates', $data, '', true)['findings']);
+        $this->assertSame([], Database::detailsData('zerodates', $data, '', false)['findings']);
     }
 
     #[TestDox('The Details button carries the finding kind and key')]
