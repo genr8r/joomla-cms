@@ -54,9 +54,11 @@ final class Database extends CMSPlugin implements SubscriberInterface
      */
     private const SCRIPT_STRINGS = [
         'JCLOSE',
+        'PLG_HEALTHCHECK_DATABASE_ACTION_REFUSED',
         'PLG_HEALTHCHECK_DATABASE_CHECKNOW_DONE',
         'PLG_HEALTHCHECK_DATABASE_CHECKNOW_FAILED',
         'PLG_HEALTHCHECK_DATABASE_CHECKNOW_PROGRESS',
+        'PLG_HEALTHCHECK_DATABASE_CHECKNOW_STALLED',
         'PLG_HEALTHCHECK_DATABASE_CHECKNOW_STARTING',
         'PLG_HEALTHCHECK_DATABASE_REQUEST_FAILED',
         'PLG_HEALTHCHECK_DATABASE_UNUSED_NAME',
@@ -470,6 +472,8 @@ final class Database extends CMSPlugin implements SubscriberInterface
         $key = \is_string($key) ? $key : '';
         $all = $input->getInt('all', 0) === 1;
 
+        // data() may rebuild a stale unused-table cache here: a metadata read (catalog + extension SQL files),
+        // the same as a dashboard load. It never runs the zero-date scan.
         return ['html' => self::renderDetails(
             PluginHelper::getLayoutPath('healthcheck', 'database', 'details'),
             self::detailsData($kind, $this->data(), $key, $all)

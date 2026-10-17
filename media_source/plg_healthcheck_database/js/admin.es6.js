@@ -92,7 +92,7 @@ const zeroDatesPass = async (restart, onProgress) => {
     onProgress(result);
 
     if (!result.complete && result.checked <= previous.checked && result.total === previous.total) {
-      throw new Error(sprintf(text('PLG_HEALTHCHECK_DATABASE_CHECKNOW_PROGRESS'), result.checked, result.total));
+      throw new Error(text('PLG_HEALTHCHECK_DATABASE_CHECKNOW_STALLED'));
     }
   }
 
@@ -100,6 +100,9 @@ const zeroDatesPass = async (restart, onProgress) => {
 };
 
 let checking = false;
+
+// The automatic zero-date batch, if one is running: Check now waits for it before restarting the pass.
+let autoRefresh = null;
 
 // Check now: refresh the unused tables, then a full zero-date pass from the first table, then reload.
 async function checkNow() {
@@ -116,6 +119,10 @@ async function checkNow() {
   setIconText(icon, text('PLG_HEALTHCHECK_DATABASE_CHECKNOW_STARTING'));
 
   try {
+    if (autoRefresh) {
+      await autoRefresh;
+    }
+
     await post('unused');
     await zeroDatesPass(true, ({ checked = 0, total = 0 }) => {
       if (total > 0) {
@@ -196,6 +203,20 @@ const openDetails = async (trigger, kind, key, all) => {
   const content = document.createElement('div');
   content.appendChild(template.content);
 
+  // Ignore / Reopen failures are shown inside the dialog; a page message would sit behind the modal.
+  const showError = (error) => {
+    let box = content.querySelector('.plg-hc-db-error');
+
+    if (!box) {
+      box = document.createElement('div');
+      box.className = 'alert alert-danger plg-hc-db-error';
+      box.setAttribute('role', 'alert');
+      content.prepend(box);
+    }
+
+    box.textContent = sprintf(text('PLG_HEALTHCHECK_DATABASE_REQUEST_FAILED'), error.message);
+  };
+
   content.addEventListener('click', async (event) => {
     const action = event.target.closest('button[data-hc-db-action]');
 
@@ -215,9 +236,11 @@ const openDetails = async (trigger, kind, key, all) => {
       if (ok) {
         updateAfter(action);
         changed = true;
+      } else {
+        showError(new Error(text('PLG_HEALTHCHECK_DATABASE_ACTION_REFUSED')));
       }
     } catch (error) {
-      failed(error);
+      showError(error);
     } finally {
       buttons.forEach((b) => { b.disabled = false; });
     }
@@ -276,35 +299,43 @@ const fillSchemaText = async () => {
 // One background zero-date batch when the stored pass is unfinished or stale. The server starts a new
 // pass when the last one is complete and stale. No reload: the next dashboard visit shows the result.
 const refreshZeroDates = async () => {
-  if (!OPTIONS.zeroDatesDue) {
+  if (!OPTIONS.zeroDatesDue || checking) {
     return;
   }
 
-  try {
-    await post('zerodates', { restart: '0' });
-  } catch (error) {
+  autoRefresh = post('zerodates', { restart: '0' }).catch(() => {
     // Check now reports errors; the automatic refresh stays silent.
-  }
+  });
+
+  await autoRefresh;
+  autoRefresh = null;
 };
 
-// The dashboard action registry may load after this module; DOMContentLoaded follows both.
-const init = () => {
+const registerActions = () => {
+  Joomla.registerHealthCheckAction('plgHealthcheckDatabaseCheckNow', checkNow);
+  Joomla.registerHealthCheckAction('plgHealthcheckDatabaseZeroDates', function zeroDates() {
+    openDetails(this, 'zerodates', '', true);
+  });
+  Joomla.registerHealthCheckAction('plgHealthcheckDatabaseUnused', function unused() {
+    openDetails(this, 'unused', '', true);
+  });
+};
+
+const start = () => {
   if (typeof Joomla.registerHealthCheckAction === 'function') {
-    Joomla.registerHealthCheckAction('plgHealthcheckDatabaseCheckNow', checkNow);
-    Joomla.registerHealthCheckAction('plgHealthcheckDatabaseZeroDates', function zeroDates() {
-      openDetails(this, 'zerodates', '', true);
-    });
-    Joomla.registerHealthCheckAction('plgHealthcheckDatabaseUnused', function unused() {
-      openDetails(this, 'unused', '', true);
-    });
+    registerActions();
   }
 
   fillSchemaText();
   refreshZeroDates();
 };
 
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', init);
+// This module runs once the document is parsed (readyState "interactive"), but possibly before the dashboard's
+// action registry script (mod_healthcheck onclick), which defines Joomla.registerHealthCheckAction. Start now
+// when the registry is already there, otherwise on DOMContentLoaded, which fires after every deferred and module
+// script. A late load (DOMContentLoaded already passed) starts at once.
+if (typeof Joomla.registerHealthCheckAction === 'function' || document.readyState === 'complete') {
+  start();
 } else {
-  init();
+  document.addEventListener('DOMContentLoaded', start, { once: true });
 }
