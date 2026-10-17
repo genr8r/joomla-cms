@@ -37,7 +37,8 @@ class ZeroDateScannerTest extends UnitTestCase
      * with another error; every call is recorded in `calls`.
      *
      * @param   array  $zeros  Zero counts keyed by "table.column", 0 when absent
-     * @param   array  $fake   gone, broken (RuntimeException), typeerror (TypeError) table names; calls (filled in)
+     * @param   array  $fake   gone, broken (RuntimeException), typeerror (TypeError) table names; present (gone
+     *                         tables tableExists() still reports); columns (replaces the date columns); calls (filled in)
      *
      * @return  Catalog
      *
@@ -45,7 +46,7 @@ class ZeroDateScannerTest extends UnitTestCase
      */
     private function catalog(array &$zeros, array &$fake = []): Catalog
     {
-        $fake += ['gone' => [], 'broken' => [], 'typeerror' => [], 'calls' => []];
+        $fake += ['gone' => [], 'broken' => [], 'typeerror' => [], 'present' => [], 'columns' => null, 'calls' => []];
 
         return new class ($zeros, $fake) implements Catalog {
             public function __construct(private array &$zeros, private array &$fake)
@@ -62,9 +63,16 @@ class ZeroDateScannerTest extends UnitTestCase
                 return true;
             }
 
+            public function tableExists(string $table, array $columns = []): bool
+            {
+                $key = strtolower($table);
+
+                return !\in_array($key, $this->fake['gone'], true) || \in_array($key, $this->fake['present'], true);
+            }
+
             public function dateColumns(string $tablePrefix): array
             {
-                return [
+                return $this->fake['columns'] ?? [
                     ['table' => 'hc_c', 'column' => 'day', 'type' => 'date'],
                     ['table' => 'HC_A', 'column' => 'created', 'type' => 'datetime'],
                     ['table' => 'hc_b', 'column' => 'modified', 'type' => 'timestamp'],
@@ -333,7 +341,7 @@ class ZeroDateScannerTest extends UnitTestCase
         $state = $scanner->run($state, 'hc_', 10, self::NOW, self::HOURS, self::DEAD);
 
         $this->assertTrue($state['complete']);
-        $this->assertSame(['hc_b' => ['name' => 'hc_b', 'at' => self::NOW]], $state['skipped']);
+        $this->assertSame(['hc_b' => ['name' => 'hc_b', 'at' => self::NOW, 'reason' => 'large']], $state['skipped']);
         $this->assertSame([['hc_c', ['day']]], $fake['calls']);
         $this->assertNull($state['inprogress']);
     }
@@ -390,7 +398,7 @@ class ZeroDateScannerTest extends UnitTestCase
 
         $state = $scanner->start($state, 'hc_', self::NOW, self::HOURS, self::DEAD);
 
-        $this->assertSame(['hc_a' => ['name' => 'HC_A', 'at' => '2026-10-16 11:00:00']], $state['skipped']);
+        $this->assertSame(['hc_a' => ['name' => 'HC_A', 'at' => '2026-10-16 11:00:00', 'reason' => 'large']], $state['skipped']);
 
         // The kept table is passed over without being counted; the dropped one is counted again.
         $state = $scanner->run($state, 'hc_', 10, self::NOW, self::HOURS, self::DEAD);
@@ -463,7 +471,7 @@ class ZeroDateScannerTest extends UnitTestCase
         $later = '2026-10-17 10:10:00';
         $state = $scanner->start($died, 'hc_', $later, self::HOURS, self::DEAD);
 
-        $this->assertSame(['hc_b' => ['name' => 'hc_b', 'at' => $later]], $state['skipped']);
+        $this->assertSame(['hc_b' => ['name' => 'hc_b', 'at' => $later, 'reason' => 'large']], $state['skipped']);
         $this->assertNull($state['inprogress']);
         $this->assertSame(0, $state['cursor']);
 
@@ -477,6 +485,65 @@ class ZeroDateScannerTest extends UnitTestCase
         $live               = $died;
         $live['inprogress'] = ['key' => 'hc_b', 'at' => 0.0];
         $this->assertSame([], $scanner->start($live, 'hc_', $later, self::HOURS, self::DEAD)['skipped']);
+    }
+
+    #[TestDox('a missing-object error on a table that still exists is an error, not a dropped table')]
+    public function testMissingButPresentIsError()
+    {
+        $zeros                  = $this->zeros();
+        $zeros['hc_b.modified'] = 4;
+        $fake                   = [];
+        $scanner                = $this->scanner($this->catalog($zeros, $fake));
+
+        $state = $scanner->run(ZeroDateScanner::emptyState(), 'hc_', 10, self::NOW, self::HOURS, self::DEAD);
+        $this->assertArrayHasKey('hc_b', $state['results']);
+
+        // A name the query mangles fails with "unknown column" although the table and column are there.
+        $fake['gone']    = ['hc_b'];
+        $fake['present'] = ['hc_b'];
+        $state           = $scanner->run($scanner->start($state, 'hc_', self::NOW, self::HOURS, self::DEAD), 'hc_', 10, self::NOW, self::HOURS, self::DEAD);
+
+        $this->assertFalse($state['complete']);
+        $this->assertSame(['table' => 'hc_b', 'at' => self::NOW], $state['error']);
+        $this->assertArrayHasKey('hc_b', $state['results'], 'the previous result is kept');
+        $this->assertNull($state['inprogress']);
+    }
+
+    #[TestDox('a table or date column whose name holds #__ is never counted and is listed as skipped for its name')]
+    public function testHashPrefixNamesAreSkipped()
+    {
+        $zeros           = $this->zeros();
+        $fake            = ['columns' => [
+            ['table' => 'hc_a', 'column' => 'created', 'type' => 'datetime'],
+            ['table' => 'hc_old#__users', 'column' => 'created', 'type' => 'datetime'],
+            ['table' => 'hc_c', 'column' => 'day', 'type' => 'date'],
+            ['table' => 'hc_c', 'column' => 'x#__y', 'type' => 'date'],
+        ]];
+        $scanner                  = $this->scanner($this->catalog($zeros, $fake));
+        $state                    = ZeroDateScanner::emptyState();
+        $state['results']['hc_c'] = ['table' => 'hc_c', 'checked' => '2026-10-01 00:00:00', 'columns' => [['column' => 'day', 'type' => 'date', 'zero' => 1]]];
+
+        $state = $scanner->start($state, 'hc_', self::NOW, self::HOURS, self::DEAD);
+
+        $this->assertSame(
+            [
+                'hc_c'           => ['name' => 'hc_c', 'at' => self::NOW, 'reason' => 'name'],
+                'hc_old#__users' => ['name' => 'hc_old#__users', 'at' => self::NOW, 'reason' => 'name'],
+            ],
+            $state['skipped']
+        );
+        $this->assertArrayNotHasKey('hc_c', $state['results'], 'a result from a mangled query is not kept');
+
+        $state = $scanner->run($state, 'hc_', 10, self::NOW, self::HOURS, self::DEAD);
+
+        $this->assertTrue($state['complete']);
+        $this->assertSame(['hc_a'], array_column($fake['calls'], 0));
+        $this->assertSame(['hc_c', 'hc_old#__users'], array_keys($state['skipped']));
+
+        // Rebuilt on every start: never retried as a count, never kept once the name is gone.
+        $later           = '2026-10-20 10:00:00';
+        $fake['columns'] = [['table' => 'hc_a', 'column' => 'created', 'type' => 'datetime']];
+        $this->assertSame([], $scanner->start($state, 'hc_', $later, self::HOURS, self::DEAD)['skipped']);
     }
 
     #[TestDox('an Error that is not a RuntimeException is recorded like one and clears the marker')]
@@ -514,7 +581,7 @@ class ZeroDateScannerTest extends UnitTestCase
 
         $this->assertTrue($state['complete']);
         $this->assertSame(['hc_b'], array_column($fake['calls'], 0));
-        $this->assertSame(['hc_c' => ['name' => 'hc_c', 'at' => null]], $state['skipped']);
+        $this->assertSame(['hc_c' => ['name' => 'hc_c', 'at' => null, 'reason' => 'large']], $state['skipped']);
 
         // Without a time it is retried on the next start.
         $state            = $scanner->start($state, 'hc_', self::NOW, self::HOURS, self::DEAD);

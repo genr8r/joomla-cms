@@ -65,6 +65,11 @@ class CatalogTest extends IntegrationTestCase implements DBTestInterface
         foreach (self::TABLES as $table) {
             $this->exec('DROP TABLE IF EXISTS ' . $db->quoteName($table));
         }
+
+        if ($this->isMysql()) {
+            // quoteName() would split the dotted name.
+            $this->exec('DROP TABLE IF EXISTS `jos84_hcdb_x.y`');
+        }
     }
 
     public function testTablesListsBaseTablesOnly(): void
@@ -155,6 +160,40 @@ class CatalogTest extends IntegrationTestCase implements DBTestInterface
         $this->assertTrue($catalog->supportsZeroDates());
     }
 
+    public function testDottedNamesAreCountedAndFound(): void
+    {
+        if (!$this->isMysql()) {
+            $this->markTestSkipped('Zero dates exist on MySQL/MariaDB only.');
+        }
+
+        $db      = $this->getDBDriver();
+        $catalog = CatalogFactory::for($db);
+        $mode    = (string) $db->setQuery('SELECT @@SESSION.sql_mode')->loadResult();
+
+        $this->exec("SET SESSION sql_mode = ''");
+
+        try {
+            $this->exec('CREATE TABLE `jos84_hcdb_x.y` (`c.d` DATETIME NULL, `a``b` DATE NULL)');
+            $this->exec("INSERT INTO `jos84_hcdb_x.y` (`c.d`, `a``b`) VALUES ('0000-00-00 00:00:00', '0000-00-00'), (NULL, '2026-10-17')");
+        } finally {
+            $this->exec('SET SESSION sql_mode = ' . $db->quote($mode));
+        }
+
+        $this->assertSame(
+            [
+                ['table' => 'jos84_hcdb_x.y', 'column' => 'c.d', 'type' => 'datetime'],
+                ['table' => 'jos84_hcdb_x.y', 'column' => 'a`b', 'type' => 'date'],
+            ],
+            $catalog->dateColumns('jos84_hcdb_')
+        );
+        $this->assertSame(['c.d' => 1, 'a`b' => 1], $catalog->zeroDateCounts('jos84_hcdb_x.y', ['c.d', 'a`b']));
+
+        $this->assertTrue($catalog->tableExists('jos84_hcdb_x.y', ['C.D', 'a`b']));
+        $this->assertTrue($catalog->tableExists('jos84_hcdb_x.y'));
+        $this->assertFalse($catalog->tableExists('jos84_hcdb_x.y', ['c.d', 'gone']));
+        $this->assertFalse($catalog->tableExists('jos84_hcdb_gone'));
+    }
+
     public function testPrefixLikeIsEscaped(): void
     {
         if (!$this->isMysql()) {
@@ -238,6 +277,11 @@ class CatalogTest extends IntegrationTestCase implements DBTestInterface
 
         $this->assertFalse($catalog->supportsZeroDates());
         $this->assertSame([], $catalog->dateColumns('jos84_hcdb_'));
+
+        $this->exec('CREATE TABLE ' . $this->getDBDriver()->quoteName('jos84_hcdb_a') . ' (id INT NOT NULL)');
+        $this->assertTrue($catalog->tableExists('jos84_hcdb_a', ['ID']));
+        $this->assertFalse($catalog->tableExists('jos84_hcdb_a', ['gone']));
+        $this->assertFalse($catalog->tableExists('jos84_hcdb_gone'));
         $this->assertSame(['x' => 0], $catalog->zeroDateCounts('jos84_hcdb_gone', ['x']));
     }
 }

@@ -557,12 +557,13 @@ final class Database extends CMSPlugin implements SubscriberInterface
             usort($findings, $openFirst);
 
             $state   = $data['state'] ?? [];
-            $skipped = [];
+            $skipped = ['large' => [], 'name' => []];
 
             foreach ($state['skipped'] ?? [] as $skippedKey => $entry) {
                 if ($all || strtolower((string) $skippedKey) === $key) {
-                    // {name, at}; a bare name was cached by an older version.
-                    $skipped[] = (string) (\is_array($entry) ? ($entry['name'] ?? $skippedKey) : $entry);
+                    // {name, at, reason}; a bare name, or no reason, was cached by an older version.
+                    $reason             = \is_array($entry) && ($entry['reason'] ?? null) === 'name' ? 'name' : 'large';
+                    $skipped[$reason][] = (string) (\is_array($entry) ? ($entry['name'] ?? $skippedKey) : $entry);
                 }
             }
 
@@ -572,7 +573,7 @@ final class Database extends CMSPlugin implements SubscriberInterface
                 $error = null;
             }
 
-            return ['kind' => $kind, 'findings' => $findings, 'skipped' => $skipped, 'error' => $error];
+            return ['kind' => $kind, 'findings' => $findings, 'skipped' => $skipped['large'], 'skippedName' => $skipped['name'], 'error' => $error];
         }
 
         $groups = [];
@@ -886,7 +887,8 @@ final class Database extends CMSPlugin implements SubscriberInterface
         $updated  = $state['updated'] ?? null;
         $never    = $updated === null && empty($state['results']);
         $error    = $state['error']['table'] ?? null;
-        $skipped  = \count($state['skipped'] ?? []);
+        $byName   = \count(array_filter($state['skipped'] ?? [], static fn ($entry): bool => \is_array($entry) && ($entry['reason'] ?? null) === 'name'));
+        $skipped  = \count($state['skipped'] ?? []) - $byName;
         $lines    = [];
 
         if ($open) {
@@ -894,7 +896,7 @@ final class Database extends CMSPlugin implements SubscriberInterface
                 Text::plural('PLG_HEALTHCHECK_DATABASE_N_COLUMNS', \count($open)),
                 Text::plural('PLG_HEALTHCHECK_DATABASE_N_TABLES', $tables)
             );
-        } elseif (!$never && $error === null && $skipped === 0) {
+        } elseif (!$never && $error === null && $skipped === 0 && $byName === 0) {
             $lines[] = Text::_('PLG_HEALTHCHECK_DATABASE_ZERODATES_NONE');
         } elseif (($state['pass'] ?? null) === null) {
             $lines[] = Text::_('PLG_HEALTHCHECK_DATABASE_ZERODATES_NEVER');
@@ -906,6 +908,10 @@ final class Database extends CMSPlugin implements SubscriberInterface
 
         if ($skipped > 0) {
             $lines[] = Text::plural('PLG_HEALTHCHECK_DATABASE_ZERODATES_SKIPPED', $skipped);
+        }
+
+        if ($byName > 0) {
+            $lines[] = Text::plural('PLG_HEALTHCHECK_DATABASE_ZERODATES_NAME_SKIPPED', $byName);
         }
 
         // One status line: the progress while a pass is unfinished, otherwise when the last pass finished.

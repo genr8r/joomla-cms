@@ -166,9 +166,38 @@ class AjaxTest extends IntegrationTestCase implements DBTestInterface
         $prefix = strtolower($this->db->getPrefix());
 
         foreach (CatalogFactory::for($this->db)->tables() as $table) {
-            if (str_starts_with(strtolower($table['name']), $prefix)) {
+            if (!str_starts_with(strtolower($table['name']), $prefix)) {
+                continue;
+            }
+
+            if ($this->isMysql()) {
+                // Quoted as one part and sent raw: a test table name may hold a dot or a literal #__.
+                $this->raw('DROP TABLE IF EXISTS `' . str_replace('`', '``', $table['name']) . '`');
+            } else {
                 $this->exec('DROP TABLE IF EXISTS ' . $this->db->quoteName($table['name']));
             }
+        }
+    }
+
+    /**
+     * Run a statement on the MySQL connection as is, without the driver's #__ replacement.
+     *
+     * @param   string  $sql  The statement
+     *
+     * @return  void
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    private function raw(string $sql): void
+    {
+        $this->db->connect();
+
+        $connection = $this->db->getConnection();
+
+        if ($connection instanceof \mysqli) {
+            $connection->query($sql);
+        } else {
+            $connection->exec($sql);
         }
     }
 
@@ -427,6 +456,47 @@ class AjaxTest extends IntegrationTestCase implements DBTestInterface
         $this->assertSame([$key], array_keys($state['skipped']));
         $this->assertSame($this->db->getPrefix() . 'zd_a', $state['skipped'][$key]['name']);
         $this->assertNull($state['inprogress']);
+    }
+
+    public function testZeroDatesDottedAndHashNames(): void
+    {
+        if (!$this->isMysql()) {
+            $this->markTestSkipped('Zero dates exist on MySQL/MariaDB only.');
+        }
+
+        $prefix = $this->db->getPrefix();
+        $dotted = $prefix . 'zd_dot.ted';
+        $hash   = $prefix . 'zd_#__x';
+        $mode   = (string) $this->db->setQuery('SELECT @@SESSION.sql_mode')->loadResult();
+
+        $this->raw("SET SESSION sql_mode = ''");
+
+        try {
+            $this->raw('CREATE TABLE `' . $dotted . '` (`c.d` DATETIME NULL)');
+            $this->raw('INSERT INTO `' . $dotted . "` (`c.d`) VALUES ('0000-00-00 00:00:00'), (NULL)");
+            $this->raw('CREATE TABLE `' . $hash . '` (created DATETIME NULL)');
+            $this->raw('INSERT INTO `' . $hash . "` (created) VALUES ('0000-00-00 00:00:00')");
+        } finally {
+            $this->raw('SET SESSION sql_mode = ' . $this->db->quote($mode));
+        }
+
+        $result = $this->ajax('POST', ['task' => 'zerodates'], ['restart' => '1'], ['params' => ['time_budget' => 20]]);
+        $state  = $this->store()->get('zerodates');
+
+        $this->assertTrue($result['complete']);
+        $this->assertNull($state['error']);
+
+        // The dotted names are counted, not dropped as gone.
+        $findings = ZeroDateScanner::findings($state, new IgnoreList([]));
+        $this->assertSame([[$dotted, 'c.d', 1]], array_map(static fn ($f) => [$f['table'], $f['column'], $f['zero']], $findings));
+
+        // The #__ name is never counted: listed as skipped for its name.
+        $this->assertSame(['name' => $hash, 'at' => $state['skipped'][strtolower($hash)]['at'], 'reason' => 'name'], $state['skipped'][strtolower($hash)]);
+        $this->assertArrayNotHasKey(strtolower($hash), $state['results']);
+
+        $html = $this->ajax('GET', ['task' => 'details', 'kind' => 'zerodates', 'key' => 'all', 'all' => '1'])['html'];
+        $this->assertStringContainsString('PLG_HEALTHCHECK_DATABASE_DETAILS_NAME_SKIPPED', $html);
+        $this->assertStringContainsString('<code>' . htmlspecialchars($hash) . '</code>', $html);
     }
 
     public function testZeroDatesOffIsComplete(): void

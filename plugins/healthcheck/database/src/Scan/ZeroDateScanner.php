@@ -44,8 +44,9 @@ final class ZeroDateScanner
      * The state before the first pass.
      *
      * `inprogress` is the table being counted right now ({key, at}, `at` from the scanner's clock) or null,
-     * `skipped` the tables a request died on (key => {name, at}, `at` Y-m-d H:i:s UTC, or null for an entry
-     * cached by an older version), and `error` the table the last run could not check ({table, at}) or null.
+     * `skipped` the tables not counted (key => {name, at, reason}: `at` Y-m-d H:i:s UTC, or null for an entry
+     * cached by an older version; `reason` `large` when a request died on it, `name` when its name or a date
+     * column name holds `#__`), and `error` the table the last run could not check ({table, at}) or null.
      *
      * @return  array
      *
@@ -110,6 +111,11 @@ final class ZeroDateScanner
      * are tried again. A dead marker left by the old pass (callers check isBusy() first) is recorded in
      * `skipped` before it is cleared, so a restart right after a request died does not count that table again.
      *
+     * A table whose name or a date column name holds `#__` is skipped for its name (and its old result
+     * dropped): the database driver replaces `#__` with the site prefix anywhere outside string literals, even
+     * inside a quoted identifier, so the count would read another table or fail. These entries are rebuilt on
+     * every start.
+     *
      * @param   array    $state         The state
      * @param   string   $tablePrefix   The site's table prefix
      * @param   string   $now           Current time (Y-m-d H:i:s, UTC)
@@ -126,12 +132,17 @@ final class ZeroDateScanner
         $dead     = $this->deadKey($state, $deadAfter);
         $deadName = $dead === null ? null : (string) ($state['tables'][$dead]['name'] ?? $dead);
         $tables   = [];
+        $byName   = [];
 
         foreach ($this->catalog->dateColumns($tablePrefix) as $column) {
             $key = strtolower($column['table']);
 
             $tables[$key]['name']      = $tables[$key]['name'] ?? $column['table'];
             $tables[$key]['columns'][] = ['column' => $column['column'], 'type' => $column['type']];
+
+            if (str_contains($column['table'], '#__') || str_contains($column['column'], '#__')) {
+                $byName[$key] = true;
+            }
         }
 
         ksort($tables);
@@ -145,14 +156,21 @@ final class ZeroDateScanner
         $state['inprogress'] = null;
         $state['skipped']    = array_filter(
             self::skipped($state),
-            static fn (array $entry): bool => !ResultStore::isStale($entry['at'], $refreshHours, $now)
+            static fn (array $entry): bool => $entry['reason'] === 'large' && !ResultStore::isStale($entry['at'], $refreshHours, $now)
         );
         $state['error']      = null;
 
         if ($dead !== null) {
             // The request that counted this table died: too large to check in one request.
-            $state['skipped'][$dead] = ['name' => $deadName, 'at' => $now];
+            $state['skipped'][$dead] = ['name' => $deadName, 'at' => $now, 'reason' => 'large'];
         }
+
+        foreach (array_keys($byName) as $key) {
+            $state['skipped'][$key] = ['name' => $tables[$key]['name'], 'at' => $now, 'reason' => 'name'];
+            unset($state['results'][$key]);
+        }
+
+        ksort($state['skipped']);
 
         return $state;
     }
@@ -216,14 +234,14 @@ final class ZeroDateScanner
             if ($dead) {
                 // The request that counted this table died: too large to check in one request.
                 $dead                   = false;
-                $state['skipped'][$key] = ['name' => $table['name'], 'at' => $now];
+                $state['skipped'][$key] = ['name' => $table['name'], 'at' => $now, 'reason' => 'large'];
                 $state['cursor']++;
 
                 continue;
             }
 
             if (isset($state['skipped'][$key])) {
-                // Skipped as too large recently: not tried again before the refresh hours are up.
+                // Skipped for its name, or as too large recently: not tried again before the refresh hours are up.
                 $state['cursor']++;
 
                 continue;
@@ -236,12 +254,19 @@ final class ZeroDateScanner
             }
 
             try {
-                $counts = $this->catalog->zeroDateCounts($table['name'], array_column($table['columns'], 'column'));
+                $counts  = $this->catalog->zeroDateCounts($table['name'], array_column($table['columns'], 'column'));
+                $failure = null;
             } catch (MissingObjectException $e) {
-                // Dropped or renamed since the pass started.
-                $counts = null;
+                // Dropped or renamed since the pass started, unless the catalog still lists it (a name the query
+                // could not reach is a failure, not a reason to drop the table's result).
+                $counts  = null;
+                $failure = $this->stillExists($table) ? $e : null;
             } catch (\Throwable $e) {
-                Log::add('Database Health Check: could not check ' . $table['name'] . ': ' . $e->getMessage(), Log::WARNING, 'healthcheck');
+                $failure = $e;
+            }
+
+            if ($failure !== null) {
+                Log::add('Database Health Check: could not check ' . $table['name'] . ': ' . $failure->getMessage(), Log::WARNING, 'healthcheck');
 
                 $state['inprogress'] = null;
                 $state['error']      = ['table' => $table['name'], 'at' => $now];
@@ -381,6 +406,25 @@ final class ZeroDateScanner
     }
 
     /**
+     * Whether the table and its date columns are still there, after a count failed as if they were gone.
+     * When the catalog cannot tell, they count as there: the failure is then recorded, not hidden.
+     *
+     * @param   array  $table  The table of the pass ({name, columns})
+     *
+     * @return  boolean
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    private function stillExists(array $table): bool
+    {
+        try {
+            return $this->catalog->tableExists($table['name'], array_column($table['columns'], 'column'));
+        } catch (\Throwable) {
+            return true;
+        }
+    }
+
+    /**
      * Key of the cursor table when its in-progress marker is dead (older than $deadAfter), otherwise null.
      *
      * @param   array  $state      The state
@@ -418,11 +462,12 @@ final class ZeroDateScanner
     }
 
     /**
-     * The skipped tables as key => {name, at}; a bare name cached by an older version gets no time.
+     * The skipped tables as key => {name, at, reason}; a bare name cached by an older version gets no time, an
+     * entry without a reason is `large`.
      *
      * @param   array  $state  The state
      *
-     * @return  array<string, array{name:string, at:?string}>
+     * @return  array<string, array{name:string, at:?string, reason:string}>
      *
      * @since   __DEPLOY_VERSION__
      */
@@ -432,8 +477,12 @@ final class ZeroDateScanner
 
         foreach ((array) ($state['skipped'] ?? []) as $key => $entry) {
             $skipped[$key] = \is_array($entry)
-                ? ['name' => (string) ($entry['name'] ?? $key), 'at' => isset($entry['at']) ? (string) $entry['at'] : null]
-                : ['name' => (string) $entry, 'at' => null];
+                ? [
+                    'name'   => (string) ($entry['name'] ?? $key),
+                    'at'     => isset($entry['at']) ? (string) $entry['at'] : null,
+                    'reason' => ($entry['reason'] ?? null) === 'name' ? 'name' : 'large',
+                ]
+                : ['name' => (string) $entry, 'at' => null, 'reason' => 'large'];
         }
 
         return $skipped;

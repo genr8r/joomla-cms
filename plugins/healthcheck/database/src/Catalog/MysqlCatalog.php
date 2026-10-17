@@ -133,6 +133,24 @@ final class MysqlCatalog implements Catalog
      *
      * @since   __DEPLOY_VERSION__
      */
+    public function tableExists(string $table, array $columns = []): bool
+    {
+        $db    = $this->db;
+        $query = $db->createQuery()
+            ->select($db->quoteName('COLUMN_NAME'))
+            ->from($db->quoteName('information_schema.COLUMNS'))
+            ->where($db->quoteName('TABLE_SCHEMA') . ' = DATABASE()')
+            ->where($db->quoteName('TABLE_NAME') . ' = :table')
+            ->bind(':table', $table);
+
+        return self::hasColumns($db->setQuery($query)->loadColumn() ?: [], $columns);
+    }
+
+    /**
+     * {@inheritdoc}
+     *
+     * @since   __DEPLOY_VERSION__
+     */
     public function zeroDateCounts(string $table, array $columns): array
     {
         if ($columns === []) {
@@ -143,13 +161,13 @@ final class MysqlCatalog implements Catalog
         $select = [];
 
         foreach (array_values($columns) as $i => $column) {
-            $select[] = 'SUM(CASE WHEN CAST(' . $db->quoteName($column) . ' AS CHAR(10)) = ' . $db->quote('0000-00-00')
+            $select[] = 'SUM(CASE WHEN CAST(' . self::identifier($column) . ' AS CHAR(10)) = ' . $db->quote('0000-00-00')
                 . ' THEN 1 ELSE 0 END) AS ' . $db->quoteName('c' . $i);
         }
 
         $query = $db->createQuery()
             ->select($select)
-            ->from($db->quoteName($table));
+            ->from(self::identifier($table));
 
         try {
             $row = $db->setQuery($query)->loadRow() ?: [];
@@ -164,5 +182,40 @@ final class MysqlCatalog implements Catalog
         }
 
         return $counts;
+    }
+
+    /**
+     * An identifier quoted as one part. quoteName() splits on dots, which turns a column `a.b` into `a`.`b`.
+     *
+     * @param   string  $name  The identifier
+     *
+     * @return  string
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    private static function identifier(string $name): string
+    {
+        return '`' . str_replace('`', '``', $name) . '`';
+    }
+
+    /**
+     * Whether a table with these columns exists (it has at least one) and holds every wanted column.
+     *
+     * @param   string[]  $present  Columns of the table, none when it does not exist
+     * @param   string[]  $wanted   Columns that must be there
+     *
+     * @return  boolean
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    private static function hasColumns(array $present, array $wanted): bool
+    {
+        if ($present === []) {
+            return false;
+        }
+
+        $present = array_map(static fn ($column): string => strtolower((string) $column), $present);
+
+        return array_diff(array_map('strtolower', $wanted), $present) === [];
     }
 }

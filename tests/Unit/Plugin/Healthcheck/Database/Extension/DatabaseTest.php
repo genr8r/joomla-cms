@@ -716,6 +716,48 @@ class DatabaseTest extends UnitTestCase
         $this->assertStringContainsString('PLG_HEALTHCHECK_DATABASE_ZERODATES_SKIPPED', $zero['text']);
     }
 
+    #[TestDox('Tables not checked because of their name get their own tile line and Details note, status unchanged')]
+    public function testZeroDatesSkippedForName(): void
+    {
+        $state             = $this->zeroState([]);
+        $state['pass']     = '2026-10-17 10:00:00';
+        $state['updated']  = '2026-10-17 10:05:00';
+        $state['complete'] = true;
+
+        $clean = $this->icons($this->plugin(['check_unused' => 0], ['zerodates' => $state]))['plg_healthcheck_database_zerodates'];
+
+        $state['skipped'] = ['hc_old#__users' => ['name' => 'hc_old#__users', 'at' => '2026-10-17 10:00:00', 'reason' => 'name']];
+
+        $zero = $this->icons($this->plugin(['check_unused' => 0], ['zerodates' => $state]))['plg_healthcheck_database_zerodates'];
+
+        $this->assertStringContainsString('PLG_HEALTHCHECK_DATABASE_ZERODATES_NAME_SKIPPED', $zero['text']);
+        $this->assertStringNotContainsString('PLG_HEALTHCHECK_DATABASE_ZERODATES_SKIPPED', $zero['text']);
+        $this->assertStringNotContainsString('PLG_HEALTHCHECK_DATABASE_ZERODATES_NONE', $zero['text']);
+        $this->assertSame($clean['status'] ?? null, $zero['status'] ?? null, 'R15: text only');
+
+        $ignores = new IgnoreList([]);
+        $data    = ['groups' => [], 'findings' => [], 'ignores' => $ignores, 'state' => $state];
+        $out     = Database::detailsData('zerodates', $data, '', true);
+
+        $this->assertSame([], $out['skipped']);
+        $this->assertSame(['hc_old#__users'], $out['skippedName']);
+
+        $html = Database::renderDetails(JPATH_ROOT . '/plugins/healthcheck/database/tmpl/details.php', $out);
+
+        $this->assertStringContainsString('PLG_HEALTHCHECK_DATABASE_DETAILS_NAME_SKIPPED', $html);
+        $this->assertStringContainsString('<code>hc_old#__users</code>', $html);
+        $this->assertStringNotContainsString('PLG_HEALTHCHECK_DATABASE_DETAILS_SKIPPED', $html);
+        $this->assertStringNotContainsString('PLG_HEALTHCHECK_DATABASE_DETAILS_NONE', $html);
+
+        $strings = parse_ini_file(JPATH_ROOT . '/administrator/language/en-GB/plg_healthcheck_database.ini');
+
+        foreach (['PLG_HEALTHCHECK_DATABASE_DETAILS_NAME_SKIPPED', 'PLG_HEALTHCHECK_DATABASE_ZERODATES_NAME_SKIPPED', 'PLG_HEALTHCHECK_DATABASE_ZERODATES_NAME_SKIPPED_1'] as $key) {
+            $this->assertArrayHasKey($key, $strings);
+        }
+
+        $this->assertStringContainsString('#__', $strings['PLG_HEALTHCHECK_DATABASE_DETAILS_NAME_SKIPPED']);
+    }
+
     #[TestDox('The zero-date progress result reports an error, which is never complete')]
     public function testProgressResultError(): void
     {

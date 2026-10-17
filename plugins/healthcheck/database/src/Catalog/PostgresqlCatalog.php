@@ -97,6 +97,26 @@ final class PostgresqlCatalog implements Catalog
      *
      * @since   __DEPLOY_VERSION__
      */
+    public function tableExists(string $table, array $columns = []): bool
+    {
+        $db    = $this->db;
+        $query = $db->createQuery()
+            ->select($db->quoteName('column_name'))
+            ->from($db->quoteName('information_schema.columns'))
+            ->where($db->quoteName('table_schema') . ' = current_schema()')
+            ->where($db->quoteName('table_name') . ' = :table')
+            ->bind(':table', $table);
+
+        $present = array_map(static fn ($column): string => strtolower((string) $column), $db->setQuery($query)->loadColumn() ?: []);
+
+        return $present !== [] && array_diff(array_map('strtolower', $columns), $present) === [];
+    }
+
+    /**
+     * {@inheritdoc}
+     *
+     * @since   __DEPLOY_VERSION__
+     */
     public function zeroDateCounts(string $table, array $columns): array
     {
         return array_fill_keys($columns, 0);

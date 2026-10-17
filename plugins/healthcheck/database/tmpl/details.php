@@ -30,8 +30,9 @@ $kind     = $displayData['kind'] ?? '';
 $groups   = $displayData['groups'] ?? [];
 $findings = $displayData['findings'] ?? [];
 $skipped  = $displayData['skipped'] ?? [];
+$byName   = $displayData['skippedName'] ?? [];
 $error    = $displayData['error'] ?? null;
-$notes    = $kind === 'zerodates' && ($skipped || $error !== null);
+$notes    = $kind === 'zerodates' && ($skipped || $byName || $error !== null);
 $rows     = ($kind === 'unused' && $groups) || ($kind === 'zerodates' && $findings);
 
 $e      = static fn ($value): string => htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8');
@@ -72,6 +73,10 @@ $actions = static function (string $state, string $kind, string $name, string $i
 <?php if ($kind === 'zerodates' && $skipped) : ?>
     <p><?php echo $e(Text::_('PLG_HEALTHCHECK_DATABASE_DETAILS_SKIPPED')); ?>
         <?php echo implode(', ', array_map(static fn ($name): string => '<code>' . $e($name) . '</code>', $skipped)); ?></p>
+<?php endif; ?>
+<?php if ($kind === 'zerodates' && $byName) : ?>
+    <p><?php echo $e(Text::_('PLG_HEALTHCHECK_DATABASE_DETAILS_NAME_SKIPPED')); ?>
+        <?php echo implode(', ', array_map(static fn ($name): string => '<code>' . $e($name) . '</code>', $byName)); ?></p>
 <?php endif; ?>
 <?php if (!$rows) : ?>
     <?php if (!$notes) : ?>

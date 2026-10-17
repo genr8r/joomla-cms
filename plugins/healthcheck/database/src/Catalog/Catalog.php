@@ -51,6 +51,19 @@ interface Catalog
     public function dateColumns(string $tablePrefix): array;
 
     /**
+     * Whether the table exists in the current database or schema with all the given columns. Used after a
+     * count failed as if the table were gone, to tell a real drop from a name the query could not reach.
+     *
+     * @param   string    $table    The real table name (prefix applied), compared as the server compares it.
+     * @param   string[]  $columns  Column names, compared case-insensitively.
+     *
+     * @return  boolean
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    public function tableExists(string $table, array $columns = []): bool;
+
+    /**
      * Number of rows holding a zero date in each of the columns, counted in one scan of the table.
      *
      * @param   string    $table    The real table name (prefix applied).
