@@ -40,7 +40,7 @@ final class MysqlCatalog implements Catalog
     public function tables(): array
     {
         $db    = $this->db;
-        $query = $db->getQuery(true)
+        $query = $db->createQuery()
             ->select(
                 [
                     $db->quoteName('TABLE_NAME', 'name'),
@@ -94,20 +94,28 @@ final class MysqlCatalog implements Catalog
     {
         $db      = $this->db;
         $pattern = addcslashes($tablePrefix, '\\_%') . '%';
-        $query   = $db->getQuery(true)
+        $query   = $db->createQuery()
             ->select(
                 [
-                    $db->quoteName('TABLE_NAME', 'tbl'),
-                    $db->quoteName('COLUMN_NAME', 'col'),
-                    $db->quoteName('DATA_TYPE', 'typ'),
+                    $db->quoteName('c.TABLE_NAME', 'tbl'),
+                    $db->quoteName('c.COLUMN_NAME', 'col'),
+                    $db->quoteName('c.DATA_TYPE', 'typ'),
                 ]
             )
-            ->from($db->quoteName('information_schema.COLUMNS'))
-            ->where($db->quoteName('TABLE_SCHEMA') . ' = DATABASE()')
-            ->where($db->quoteName('DATA_TYPE') . ' IN (' . implode(',', $db->quote(['date', 'datetime', 'timestamp'])) . ')')
-            ->where($db->quoteName('TABLE_NAME') . ' LIKE :prefix')
+            ->from($db->quoteName('information_schema.COLUMNS', 'c'))
+            // Base tables only, like tables(): a view over a table would count its zero dates twice.
+            ->join(
+                'INNER',
+                $db->quoteName('information_schema.TABLES', 't'),
+                $db->quoteName('t.TABLE_SCHEMA') . ' = ' . $db->quoteName('c.TABLE_SCHEMA')
+                    . ' AND ' . $db->quoteName('t.TABLE_NAME') . ' = ' . $db->quoteName('c.TABLE_NAME')
+            )
+            ->where($db->quoteName('c.TABLE_SCHEMA') . ' = DATABASE()')
+            ->where($db->quoteName('t.TABLE_TYPE') . ' = ' . $db->quote('BASE TABLE'))
+            ->where($db->quoteName('c.DATA_TYPE') . ' IN (' . implode(',', $db->quote(['date', 'datetime', 'timestamp'])) . ')')
+            ->where($db->quoteName('c.TABLE_NAME') . ' LIKE :prefix')
             ->bind(':prefix', $pattern)
-            ->order([$db->quoteName('TABLE_NAME'), $db->quoteName('ORDINAL_POSITION')]);
+            ->order([$db->quoteName('c.TABLE_NAME'), $db->quoteName('c.ORDINAL_POSITION')]);
 
         $result = [];
 
@@ -123,18 +131,36 @@ final class MysqlCatalog implements Catalog
      *
      * @since   __DEPLOY_VERSION__
      */
-    public function zeroDateCount(string $table, string $column): int
+    public function zeroDateCounts(string $table, array $columns): array
     {
-        $db    = $this->db;
-        $query = $db->getQuery(true)
-            ->select('COUNT(*)')
-            ->from($db->quoteName($table))
-            ->where('CAST(' . $db->quoteName($column) . ' AS CHAR(10)) = ' . $db->quote('0000-00-00'));
+        if ($columns === []) {
+            return [];
+        }
+
+        $db     = $this->db;
+        $select = [];
+
+        foreach (array_values($columns) as $i => $column) {
+            $select[] = 'SUM(CASE WHEN CAST(' . $db->quoteName($column) . ' AS CHAR(10)) = ' . $db->quote('0000-00-00')
+                . ' THEN 1 ELSE 0 END) AS ' . $db->quoteName('c' . $i);
+        }
+
+        $query = $db->createQuery()
+            ->select($select)
+            ->from($db->quoteName($table));
 
         try {
-            return (int) $db->setQuery($query)->loadResult();
+            $row = $db->setQuery($query)->loadRow() ?: [];
         } catch (\RuntimeException $e) {
-            throw new \RuntimeException($e->getMessage(), (int) $e->getCode(), $e);
+            throw MissingObjectException::wrap($e, 'Could not count the zero dates of ' . $table . ': ' . $e->getMessage());
         }
+
+        $counts = [];
+
+        foreach (array_values($columns) as $i => $column) {
+            $counts[$column] = (int) ($row[$i] ?? 0);
+        }
+
+        return $counts;
     }
 }

@@ -51,16 +51,17 @@ interface Catalog
     public function dateColumns(string $tablePrefix): array;
 
     /**
-     * Number of rows holding a zero date in the column.
+     * Number of rows holding a zero date in each of the columns, counted in one scan of the table.
      *
-     * @param   string  $table   The real table name (prefix applied).
-     * @param   string  $column  The column name.
+     * @param   string    $table    The real table name (prefix applied).
+     * @param   string[]  $columns  The column names.
      *
-     * @return  integer
+     * @return  array<string, int>  Count per column name, in the order given
      *
-     * @throws  \RuntimeException  If the table or column no longer exists.
+     * @throws  MissingObjectException  If the table or a column no longer exists.
+     * @throws  \RuntimeException       On any other failure (the original is the previous exception).
      *
      * @since   __DEPLOY_VERSION__
      */
-    public function zeroDateCount(string $table, string $column): int;
+    public function zeroDateCounts(string $table, array $columns): array;
 }

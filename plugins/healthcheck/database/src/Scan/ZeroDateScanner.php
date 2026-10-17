@@ -10,7 +10,9 @@
 
 namespace Joomla\Plugin\Healthcheck\Database\Scan;
 
+use Joomla\CMS\Log\Log;
 use Joomla\Plugin\Healthcheck\Database\Catalog\Catalog;
+use Joomla\Plugin\Healthcheck\Database\Catalog\MissingObjectException;
 use Joomla\Plugin\Healthcheck\Database\Ignore\IgnoreList;
 
 // phpcs:disable PSR1.Files.SideEffects
@@ -27,6 +29,8 @@ use Joomla\Plugin\Healthcheck\Database\Ignore\IgnoreList;
 final class ZeroDateScanner
 {
     /**
+     * Constructor
+     *
      * @param   Catalog   $catalog  The catalog
      * @param   \Closure  $clock    Returns the current time in float seconds
      *
@@ -37,17 +41,33 @@ final class ZeroDateScanner
     }
 
     /**
+     * The state before the first pass.
+     *
+     * `inprogress` is the key of the table being counted right now, `skipped` the tables a request died on
+     * (key => spelling), and `error` the table the last run could not check ({table, at}) or null.
+     *
      * @return  array
      *
      * @since   __DEPLOY_VERSION__
      */
     public static function emptyState(): array
     {
-        return ['pass' => null, 'cursor' => 0, 'tables' => [], 'results' => [], 'complete' => false, 'updated' => null];
+        return [
+            'pass'       => null,
+            'cursor'     => 0,
+            'tables'     => [],
+            'results'    => [],
+            'complete'   => false,
+            'updated'    => null,
+            'inprogress' => null,
+            'skipped'    => [],
+            'error'      => null,
+        ];
     }
 
     /**
-     * Begin a new pass. Earlier results are kept until their tables are checked again.
+     * Begin a new pass. Earlier results are kept until their tables are checked again; skipped tables are
+     * tried again.
      *
      * @param   array   $state        The state
      * @param   string  $tablePrefix  The site's table prefix
@@ -70,11 +90,15 @@ final class ZeroDateScanner
 
         ksort($tables);
 
-        $state['pass']     = $now;
-        $state['cursor']   = 0;
-        $state['tables']   = $tables;
-        $state['complete'] = false;
-        $state['results']  = $state['results'] ?? [];
+        $state = $state + self::emptyState();
+
+        $state['pass']       = $now;
+        $state['cursor']     = 0;
+        $state['tables']     = $tables;
+        $state['complete']   = false;
+        $state['inprogress'] = null;
+        $state['skipped']    = [];
+        $state['error']      = null;
 
         return $state;
     }
@@ -82,49 +106,92 @@ final class ZeroDateScanner
     /**
      * Check tables from the cursor until the budget is used up, always at least one.
      *
-     * @param   array    $state          The state
-     * @param   string   $tablePrefix    The site's table prefix
-     * @param   float    $budgetSeconds  Seconds this run may take
-     * @param   string   $now            Current time (Y-m-d H:i:s, UTC)
+     * Before each table its key is put in `inprogress` and the state is handed to $beforeTable, so the caller
+     * can store it: when a request dies on a huge table, the next run finds the marker on the cursor table,
+     * records it in `skipped` and moves on instead of dying on it again.
+     *
+     * A table that is gone is dropped from the results. Any other failure keeps the table's previous result,
+     * records `error`, leaves the cursor on that table and ends the run, so a pass never completes through
+     * errors.
+     *
+     * @param   array          $state          The state
+     * @param   string         $tablePrefix    The site's table prefix
+     * @param   float          $budgetSeconds  Seconds this run may take
+     * @param   string         $now            Current time (Y-m-d H:i:s, UTC)
+     * @param   \Closure|null  $beforeTable    Called with the state before each table is counted
      *
      * @return  array
      *
      * @since   __DEPLOY_VERSION__
      */
-    public function run(array $state, string $tablePrefix, float $budgetSeconds, string $now): array
+    public function run(array $state, string $tablePrefix, float $budgetSeconds, string $now, ?\Closure $beforeTable = null): array
     {
         if (($state['pass'] ?? null) === null) {
-            $state = $this->start($state + self::emptyState(), $tablePrefix, $now);
+            $state = $this->start($state, $tablePrefix, $now);
         }
 
-        $began = ($this->clock)();
-        $keys  = array_keys($state['tables']);
-        $total = \count($keys);
+        $state += self::emptyState();
+        $began  = ($this->clock)();
+        $keys   = array_keys($state['tables']);
+        $total  = \count($keys);
+
+        // A marker for another table than the cursor one is left over from an older pass.
+        if ($state['inprogress'] !== null && $state['inprogress'] !== ($keys[$state['cursor']] ?? null)) {
+            $state['inprogress'] = null;
+        }
 
         while ($state['cursor'] < $total) {
             $key   = $keys[$state['cursor']];
             $table = $state['tables'][$key];
 
-            try {
-                $columns = [];
+            if ($state['inprogress'] === $key) {
+                // The request that counted this table died: too large to check in one request.
+                $state['skipped'][$key] = $table['name'];
+                $state['inprogress']    = null;
+                $state['cursor']++;
 
-                foreach ($table['columns'] as $column) {
-                    $zero = $this->catalog->zeroDateCount($table['name'], $column['column']);
-
-                    if ($zero > 0) {
-                        $columns[] = ['column' => $column['column'], 'type' => $column['type'], 'zero' => $zero];
-                    }
-                }
-
-                if ($columns === []) {
-                    unset($state['results'][$key]);
-                } else {
-                    $state['results'][$key] = ['table' => $table['name'], 'checked' => $now, 'columns' => $columns];
-                }
-            } catch (\RuntimeException $e) {
-                unset($state['results'][$key]);
+                continue;
             }
 
+            $state['inprogress'] = $key;
+
+            if ($beforeTable !== null) {
+                $beforeTable($state);
+            }
+
+            try {
+                $counts = $this->catalog->zeroDateCounts($table['name'], array_column($table['columns'], 'column'));
+            } catch (MissingObjectException $e) {
+                // Dropped or renamed since the pass started.
+                $counts = null;
+            } catch (\RuntimeException $e) {
+                Log::add('Database Health Check: could not check ' . $table['name'] . ': ' . $e->getMessage(), Log::WARNING, 'healthcheck');
+
+                $state['inprogress'] = null;
+                $state['error']      = ['table' => $table['name'], 'at' => $now];
+
+                break;
+            }
+
+            $columns = [];
+
+            foreach ($counts === null ? [] : $table['columns'] as $column) {
+                $zero = (int) ($counts[$column['column']] ?? 0);
+
+                if ($zero > 0) {
+                    $columns[] = ['column' => $column['column'], 'type' => $column['type'], 'zero' => $zero];
+                }
+            }
+
+            if ($columns === []) {
+                unset($state['results'][$key]);
+            } else {
+                $state['results'][$key] = ['table' => $table['name'], 'checked' => $now, 'columns' => $columns];
+            }
+
+            unset($state['skipped'][$key]);
+            $state['inprogress'] = null;
+            $state['error']      = null;
             $state['cursor']++;
 
             if (($this->clock)() - $began >= $budgetSeconds) {
@@ -132,10 +199,11 @@ final class ZeroDateScanner
             }
         }
 
-        if ($state['cursor'] >= $total) {
+        if ($state['cursor'] >= $total && $state['error'] === null) {
             $state['complete'] = true;
             $state['updated']  = $now;
             $state['results']  = array_intersect_key($state['results'], $state['tables']);
+            $state['skipped']  = array_intersect_key($state['skipped'], $state['tables']);
         }
 
         return $state;

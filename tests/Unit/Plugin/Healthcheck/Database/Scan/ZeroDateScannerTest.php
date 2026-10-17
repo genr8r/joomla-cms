@@ -11,6 +11,7 @@
 namespace Joomla\Tests\Unit\Plugin\Healthcheck\Database\Scan;
 
 use Joomla\Plugin\Healthcheck\Database\Catalog\Catalog;
+use Joomla\Plugin\Healthcheck\Database\Catalog\MissingObjectException;
 use Joomla\Plugin\Healthcheck\Database\Ignore\IgnoreList;
 use Joomla\Plugin\Healthcheck\Database\Scan\ResultStore;
 use Joomla\Plugin\Healthcheck\Database\Scan\ZeroDateScanner;
@@ -28,16 +29,22 @@ class ZeroDateScannerTest extends UnitTestCase
     private const NOW = '2026-10-17 10:00:00';
 
     /**
-     * @param   array  $zeros  Zero counts keyed by "table.column"; a missing key makes the table throw
+     * A catalog with three date tables. Tables listed in `gone` are missing, tables listed in `broken` fail
+     * with another error; every call is recorded in `calls`.
+     *
+     * @param   array  $zeros  Zero counts keyed by "table.column", 0 when absent
+     * @param   array  $fake   gone (table names), broken (table names), calls (filled in)
      *
      * @return  Catalog
      *
      * @since   __DEPLOY_VERSION__
      */
-    private function catalog(array &$zeros): Catalog
+    private function catalog(array &$zeros, array &$fake = []): Catalog
     {
-        return new class ($zeros) implements Catalog {
-            public function __construct(private array &$zeros)
+        $fake += ['gone' => [], 'broken' => [], 'calls' => []];
+
+        return new class ($zeros, $fake) implements Catalog {
+            public function __construct(private array &$zeros, private array &$fake)
             {
             }
 
@@ -60,15 +67,26 @@ class ZeroDateScannerTest extends UnitTestCase
                 ];
             }
 
-            public function zeroDateCount(string $table, string $column): int
+            public function zeroDateCounts(string $table, array $columns): array
             {
-                $key = strtolower($table) . '.' . $column;
+                $this->fake['calls'][] = [$table, $columns];
+                $key                   = strtolower($table);
 
-                if (!isset($this->zeros[$key])) {
-                    throw new \RuntimeException('gone');
+                if (\in_array($key, $this->fake['gone'], true)) {
+                    throw new MissingObjectException('gone', 1146, new \RuntimeException('previous'));
                 }
 
-                return $this->zeros[$key];
+                if (\in_array($key, $this->fake['broken'], true)) {
+                    throw new \RuntimeException('lost connection', 2013);
+                }
+
+                $counts = [];
+
+                foreach ($columns as $column) {
+                    $counts[$column] = $this->zeros[$key . '.' . $column] ?? 0;
+                }
+
+                return $counts;
             }
         };
     }
@@ -177,9 +195,9 @@ class ZeroDateScannerTest extends UnitTestCase
     #[TestDox('a table dropped during the pass is skipped')]
     public function testDroppedTableIsSkipped()
     {
-        $zeros = $this->zeros();
-        unset($zeros['hc_b.modified']);
-        $scanner = $this->scanner($this->catalog($zeros));
+        $zeros   = $this->zeros();
+        $fake    = ['gone' => ['hc_b']];
+        $scanner = $this->scanner($this->catalog($zeros, $fake));
 
         $state = $scanner->run(ZeroDateScanner::emptyState(), 'hc_', 10, self::NOW);
 
@@ -193,15 +211,125 @@ class ZeroDateScannerTest extends UnitTestCase
     {
         $zeros                  = $this->zeros();
         $zeros['hc_b.modified'] = 4;
-        $scanner                = $this->scanner($this->catalog($zeros));
+        $fake                   = [];
+        $scanner                = $this->scanner($this->catalog($zeros, $fake));
 
         $state = $scanner->run(ZeroDateScanner::emptyState(), 'hc_', 10, self::NOW);
         $this->assertArrayHasKey('hc_b', $state['results']);
 
-        unset($zeros['hc_b.modified']);
-        $state = $scanner->run($scanner->start($state, 'hc_', self::NOW), 'hc_', 10, self::NOW);
+        $fake['gone'] = ['hc_b'];
+        $state        = $scanner->run($scanner->start($state, 'hc_', self::NOW), 'hc_', 10, self::NOW);
 
         $this->assertArrayNotHasKey('hc_b', $state['results']);
+    }
+
+    #[TestDox('each table is counted with one catalog call for all its date columns')]
+    public function testOneCallPerTable()
+    {
+        $zeros   = $this->zeros();
+        $fake    = [];
+        $scanner = $this->scanner($this->catalog($zeros, $fake));
+
+        $scanner->run(ZeroDateScanner::emptyState(), 'hc_', 10, self::NOW);
+
+        $this->assertSame([['HC_A', ['created']], ['hc_b', ['modified']], ['hc_c', ['day']]], $fake['calls']);
+    }
+
+    #[TestDox('any other error keeps the result, stops the batch, does not advance and records the table')]
+    public function testOtherErrorStopsWithoutAdvancing()
+    {
+        $zeros                  = $this->zeros();
+        $zeros['hc_b.modified'] = 4;
+        $fake                   = [];
+        $scanner                = $this->scanner($this->catalog($zeros, $fake));
+
+        $state = $scanner->run(ZeroDateScanner::emptyState(), 'hc_', 10, self::NOW);
+        $this->assertArrayHasKey('hc_b', $state['results']);
+
+        $later          = '2026-10-17 11:00:00';
+        $fake['broken'] = ['hc_b'];
+        $fake['calls']  = [];
+        $state          = $scanner->run($scanner->start($state, 'hc_', $later), 'hc_', 10, $later);
+
+        $this->assertFalse($state['complete']);
+        $this->assertSame(self::NOW, $state['updated'], 'the last complete pass stays the reference');
+        $this->assertSame(['checked' => 1, 'total' => 3], ZeroDateScanner::progress($state));
+        $this->assertSame(['table' => 'hc_b', 'at' => $later], $state['error']);
+        $this->assertSame(self::NOW, $state['results']['hc_b']['checked'], 'the previous result is kept');
+        $this->assertSame(['HC_A', 'hc_b'], array_column($fake['calls'], 0), 'the batch stops at the failing table');
+
+        // Retrying fails again without advancing; the pass never completes through errors.
+        $state = $scanner->run($state, 'hc_', 10, $later);
+        $this->assertFalse($state['complete']);
+        $this->assertSame(1, $state['cursor']);
+
+        // The next successful table clears the error.
+        $fake['broken'] = [];
+        $state          = $scanner->run($state, 'hc_', 10, $later);
+        $this->assertTrue($state['complete']);
+        $this->assertNull($state['error']);
+        $this->assertSame($later, $state['results']['hc_b']['checked']);
+    }
+
+    #[TestDox('the table is marked in progress, and handed to the callback, before the catalog is asked')]
+    public function testInProgressMarker()
+    {
+        $zeros   = $this->zeros();
+        $fake    = [];
+        $scanner = $this->scanner($this->catalog($zeros, $fake));
+        $seen    = [];
+
+        $state = $scanner->run(
+            ZeroDateScanner::emptyState(),
+            'hc_',
+            10,
+            self::NOW,
+            static function (array $state) use (&$seen, &$fake): void {
+                $seen[] = [$state['inprogress'], \count($fake['calls'])];
+            }
+        );
+
+        $this->assertSame([['hc_a', 0], ['hc_b', 1], ['hc_c', 2]], $seen);
+        $this->assertNull($state['inprogress']);
+    }
+
+    #[TestDox('a table a request died on is skipped as too large, and the pass moves on')]
+    public function testDeadRequestTableIsSkipped()
+    {
+        $zeros   = $this->zeros();
+        $fake    = [];
+        $scanner = $this->scanner($this->catalog($zeros, $fake));
+
+        // A run that died while counting hc_b left this state behind.
+        $state               = $scanner->start(ZeroDateScanner::emptyState(), 'hc_', self::NOW);
+        $state['cursor']     = 1;
+        $state['inprogress'] = 'hc_b';
+
+        $state = $scanner->run($state, 'hc_', 10, self::NOW);
+
+        $this->assertTrue($state['complete']);
+        $this->assertSame(['hc_b' => 'hc_b'], $state['skipped']);
+        $this->assertSame([['hc_c', ['day']]], $fake['calls']);
+        $this->assertNull($state['inprogress']);
+
+        // A new pass tries it again.
+        $state = $scanner->run($scanner->start($state, 'hc_', self::NOW), 'hc_', 10, self::NOW);
+        $this->assertSame([], $state['skipped']);
+    }
+
+    #[TestDox('a stale in-progress marker for another table is dropped')]
+    public function testStaleMarkerDropped()
+    {
+        $zeros   = $this->zeros();
+        $scanner = $this->scanner($this->catalog($zeros));
+
+        $state               = $scanner->start(ZeroDateScanner::emptyState(), 'hc_', self::NOW);
+        $state['inprogress'] = 'hc_c';
+
+        $state = $scanner->run($state, 'hc_', 1, self::NOW);
+
+        $this->assertSame([], $state['skipped']);
+        $this->assertSame(['checked' => 1, 'total' => 3], ZeroDateScanner::progress($state));
     }
 
     #[TestDox('a result for a table that is gone is pruned when the pass completes')]

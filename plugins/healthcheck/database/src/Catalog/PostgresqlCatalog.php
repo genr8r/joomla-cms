@@ -40,7 +40,7 @@ final class PostgresqlCatalog implements Catalog
     public function tables(): array
     {
         $db    = $this->db;
-        $query = $db->getQuery(true)
+        $query = $db->createQuery()
             ->select(
                 [
                     $db->quoteName('c.relname', 'name'),
@@ -95,8 +95,8 @@ final class PostgresqlCatalog implements Catalog
      *
      * @since   __DEPLOY_VERSION__
      */
-    public function zeroDateCount(string $table, string $column): int
+    public function zeroDateCounts(string $table, array $columns): array
     {
-        return 0;
+        return array_fill_keys($columns, 0);
     }
 }

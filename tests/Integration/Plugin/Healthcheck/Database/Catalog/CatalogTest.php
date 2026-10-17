@@ -11,6 +11,7 @@
 namespace Joomla\Tests\Integration\Plugin\Healthcheck\Database\Catalog;
 
 use Joomla\Plugin\Healthcheck\Database\Catalog\CatalogFactory;
+use Joomla\Plugin\Healthcheck\Database\Catalog\MissingObjectException;
 use Joomla\Tests\Integration\DBTestInterface;
 use Joomla\Tests\Integration\DBTestTrait;
 use Joomla\Tests\Integration\IntegrationTestCase;
@@ -139,9 +140,10 @@ class CatalogTest extends IntegrationTestCase implements DBTestInterface
             ], $columns);
 
             $check = function () use ($catalog): void {
-                $this->assertSame(2, $catalog->zeroDateCount('jos84_hcdb_d', 'created'));
-                $this->assertSame(1, $catalog->zeroDateCount('jos84_hcdb_d', 'day'));
-                $this->assertSame(1, $catalog->zeroDateCount('jos84_hcdb_d', 'stamp'));
+                $this->assertSame(
+                    ['created' => 2, 'day' => 1, 'stamp' => 1],
+                    $catalog->zeroDateCounts('jos84_hcdb_d', ['created', 'day', 'stamp'])
+                );
             };
 
             $check();
@@ -174,8 +176,56 @@ class CatalogTest extends IntegrationTestCase implements DBTestInterface
             $this->markTestSkipped('PostgreSQL never counts zero dates (see testPostgresHasNoZeroDates).');
         }
 
-        $this->expectException(\RuntimeException::class);
-        CatalogFactory::for($this->getDBDriver())->zeroDateCount('jos84_hcdb_gone', 'x');
+        try {
+            CatalogFactory::for($this->getDBDriver())->zeroDateCounts('jos84_hcdb_gone', ['x']);
+            $this->fail('A missing table must throw');
+        } catch (MissingObjectException $e) {
+            $this->assertInstanceOf(\RuntimeException::class, $e->getPrevious());
+        }
+    }
+
+    public function testMissingColumnThrows(): void
+    {
+        if (!$this->isMysql()) {
+            $this->markTestSkipped('PostgreSQL never counts zero dates (see testPostgresHasNoZeroDates).');
+        }
+
+        $db = $this->getDBDriver();
+        $this->exec('CREATE TABLE ' . $db->quoteName('jos84_hcdb_d') . ' (created DATETIME NULL)');
+
+        try {
+            CatalogFactory::for($db)->zeroDateCounts('jos84_hcdb_d', ['created', 'gone']);
+            $this->fail('A missing column must throw');
+        } catch (MissingObjectException $e) {
+            $this->assertInstanceOf(\RuntimeException::class, $e->getPrevious());
+        }
+    }
+
+    public function testEmptyTableCountsZero(): void
+    {
+        if (!$this->isMysql()) {
+            $this->markTestSkipped('Zero dates exist on MySQL/MariaDB only.');
+        }
+
+        $db = $this->getDBDriver();
+        $this->exec('CREATE TABLE ' . $db->quoteName('jos84_hcdb_d') . ' (created DATETIME NULL, `day` DATE NULL)');
+
+        $this->assertSame(['created' => 0, 'day' => 0], CatalogFactory::for($db)->zeroDateCounts('jos84_hcdb_d', ['created', 'day']));
+    }
+
+    public function testDateColumnsSkipViews(): void
+    {
+        if (!$this->isMysql()) {
+            $this->markTestSkipped('dateColumns() is MySQL/MariaDB only.');
+        }
+
+        $db = $this->getDBDriver();
+        $this->exec('CREATE TABLE ' . $db->quoteName('jos84_hcdb_d') . ' (created DATETIME NULL)');
+        $this->exec('CREATE VIEW ' . $db->quoteName('jos84_hcdb_v') . ' AS SELECT created FROM ' . $db->quoteName('jos84_hcdb_d'));
+
+        $tables = array_values(array_unique(array_column(CatalogFactory::for($db)->dateColumns('jos84_hcdb_'), 'table')));
+
+        $this->assertSame(['jos84_hcdb_d'], $tables);
     }
 
     public function testPostgresHasNoZeroDates(): void
@@ -188,6 +238,6 @@ class CatalogTest extends IntegrationTestCase implements DBTestInterface
 
         $this->assertFalse($catalog->supportsZeroDates());
         $this->assertSame([], $catalog->dateColumns('jos84_hcdb_'));
-        $this->assertSame(0, $catalog->zeroDateCount('jos84_hcdb_gone', 'x'));
+        $this->assertSame(['x' => 0], $catalog->zeroDateCounts('jos84_hcdb_gone', ['x']));
     }
 }
