@@ -49,6 +49,10 @@ final class IgnoreList
         foreach ($entries as $entry) {
             $name = strtolower((string) ($entry['name'] ?? ''));
 
+            if ($name === '') {
+                continue;
+            }
+
             switch ($entry['kind'] ?? '') {
                 case 'table':
                     $this->tables[$name] = true;
@@ -85,6 +89,18 @@ final class IgnoreList
         }
 
         return false;
+    }
+
+    /**
+     * @param   string  $table  Table name
+     *
+     * @return  boolean  True only for an explicit table entry (prefix entries are not considered)
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    public function hasTableEntry(string $table): bool
+    {
+        return isset($this->tables[strtolower($table)]);
     }
 
     /**

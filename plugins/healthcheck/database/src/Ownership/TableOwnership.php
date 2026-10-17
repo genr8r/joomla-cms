@@ -102,12 +102,14 @@ final class TableOwnership
 
         $realBase = realpath($base);
 
-        if ($realBase === false || !is_file($manifest)) {
+        $realManifest = $realBase === false ? false : realpath($manifest);
+
+        if ($realBase === false || $realManifest === false || !str_starts_with($realManifest, $realBase . DIRECTORY_SEPARATOR) || !is_file($realManifest)) {
             return [];
         }
 
         $previous = libxml_use_internal_errors(true);
-        $xml      = simplexml_load_file($manifest, \SimpleXMLElement::class, LIBXML_NONET);
+        $xml      = simplexml_load_file($realManifest, \SimpleXMLElement::class, LIBXML_NONET);
         libxml_clear_errors();
         libxml_use_internal_errors($previous);
 

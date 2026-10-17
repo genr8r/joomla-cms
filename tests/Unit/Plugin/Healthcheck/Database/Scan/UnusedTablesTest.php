@@ -25,6 +25,8 @@ class UnusedTablesTest extends UnitTestCase
 {
     private const ACCOUNTED = ['#__content', '#__foo_items'];
 
+    private const SET = ['hc_content', 'hc_foo_items', 'hc_orphan', 'kiufs_content', 'kiufs_users', 'legacy'];
+
     /**
      * @param   string[]  $names  Table names
      *
@@ -57,8 +59,6 @@ class UnusedTablesTest extends UnitTestCase
 
         return $out;
     }
-
-    private const SET = ['hc_content', 'hc_foo_items', 'hc_orphan', 'kiufs_content', 'kiufs_users', 'legacy'];
 
     #[TestDox('Tables are grouped by prefix with the own group first')]
     public function testGroups(): void
@@ -134,5 +134,18 @@ class UnusedTablesTest extends UnitTestCase
         $this->assertSame(3, UnusedTables::openCount($groups));
         $this->assertSame(1, UnusedTables::ignoredCount($groups));
         $this->assertSame([false, true], array_column($groups[2]['tables'], 'ignored'));
+    }
+
+    #[TestDox('A prefix entry does not silence the site\'s own tables')]
+    public function testPrefixEntryDoesNotSilenceOwnTables(): void
+    {
+        $ignored = new IgnoreList([['kind' => 'prefix', 'name' => 'abc_']]);
+        $groups  = UnusedTables::groups($this->tables(['abc_x_orphan', 'abc_old']), [], 'abc_x_', $ignored);
+
+        $this->assertSame(['abc_x_', 'abc_'], array_column($groups, 'prefix'));
+        $this->assertFalse($groups[0]['tables'][0]['ignored']);
+        $this->assertTrue($groups[1]['prefixIgnored']);
+        $this->assertTrue($groups[1]['tables'][0]['ignored']);
+        $this->assertSame(1, UnusedTables::openCount($groups));
     }
 }

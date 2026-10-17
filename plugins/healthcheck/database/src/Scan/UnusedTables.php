@@ -71,7 +71,7 @@ final class UnusedTables
                 'rows'    => $table['rows'] ?? null,
                 'bytes'   => $table['bytes'] ?? null,
                 'updated' => $table['updated'] ?? null,
-                'ignored' => $groups[$key]['prefixIgnored'] || $ignored->isTableIgnored($name),
+                'ignored' => $groups[$key]['prefixIgnored'] || $ignored->hasTableEntry($name),
             ];
         }
 
@@ -80,6 +80,8 @@ final class UnusedTables
         foreach ($groups as &$group) {
             usort($group['tables'], static fn ($a, $b) => strcmp($a['name'], $b['name']));
         }
+
+        unset($group);
 
         return array_values($groups);
     }

@@ -67,10 +67,11 @@ class TableOwnershipTest extends UnitTestCase
     #[TestDox('Extension types without a known location are skipped')]
     public function testUnknownTypeSkipped(): void
     {
-        $with    = $this->ownership()->accounted([$this->extension('library', 'foo')]);
-        $without = $this->ownership()->accounted([]);
+        // com_foo would resolve to a fixture with SQL if a library were treated like a component.
+        $names = $this->ownership()->accounted([$this->extension('library', 'com_foo')]);
 
-        $this->assertSame($without, $with);
+        $this->assertNotContains('#__foo_items', $names);
+        $this->assertNotContains('#__foo_log', $names);
     }
 
     #[TestDox('A manifest path leaving the extension folder is not read')]
@@ -79,5 +80,31 @@ class TableOwnershipTest extends UnitTestCase
         $names = $this->ownership()->accounted([$this->extension('component', 'com_evil')]);
 
         $this->assertNotContains('#__evil', $names);
+    }
+
+    #[TestDox('A manifest symlinked from outside the extension folder is not read')]
+    public function testSymlinkedManifestRejected(): void
+    {
+        $root = sys_get_temp_dir() . '/hcdb-' . uniqid();
+        $base = $root . '/administrator/components/com_sym';
+
+        mkdir($base . '/sql', 0777, true);
+        file_put_contents($root . '/outside.xml', '<extension type="component"><install><sql><file>sql/a.sql</file></sql></install></extension>');
+        file_put_contents($base . '/sql/a.sql', 'CREATE TABLE `#__symlinked` (`id` int);');
+        symlink($root . '/outside.xml', $base . '/sym.xml');
+
+        try {
+            $names = (new TableOwnership($root, $root . '/administrator'))->accounted([$this->extension('component', 'com_sym')]);
+            $this->assertNotContains('#__symlinked', $names);
+        } finally {
+            unlink($base . '/sym.xml');
+            unlink($base . '/sql/a.sql');
+            unlink($root . '/outside.xml');
+            rmdir($base . '/sql');
+            rmdir($base);
+            rmdir($root . '/administrator/components');
+            rmdir($root . '/administrator');
+            rmdir($root);
+        }
     }
 }
