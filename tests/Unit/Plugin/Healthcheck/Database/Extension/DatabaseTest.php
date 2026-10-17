@@ -70,11 +70,13 @@ class DatabaseTest extends UnitTestCase
         Factory::$language = $language;
 
         HTMLHelper::register('date', static fn ($value): string => 'DATE(' . $value . ')');
+        HTMLHelper::register('date.relative', static fn ($value): string => 'AGO(' . $value . ')');
     }
 
     protected function tearDown(): void
     {
         HTMLHelper::unregister('date');
+        HTMLHelper::unregister('date.relative');
         Factory::$language    = null;
         Factory::$application = null;
         $_GET                 = $this->get;
@@ -307,7 +309,7 @@ class DatabaseTest extends UnitTestCase
         $this->assertArrayNotHasKey('status', $icons['plg_healthcheck_database_checknow']);
     }
 
-    #[TestDox('A partial zero-date pass shows its results, the check time and the progress')]
+    #[TestDox('A partial zero-date pass shows its results and only the progress line')]
     public function testZeroDatesPartial(): void
     {
         $state             = $this->zeroState(['hc_a' => ['created', 'modified']]);
@@ -324,7 +326,7 @@ class DatabaseTest extends UnitTestCase
         $this->assertSame(2, $zero['amount']);
         $this->assertSame('warning', $zero['status']);
         $this->assertSame(
-            'PLG_HEALTHCHECK_DATABASE_N_IN_M<br>PLG_HEALTHCHECK_DATABASE_ZERODATES_CHECKED<br>PLG_HEALTHCHECK_DATABASE_ZERODATES_PARTIAL',
+            'PLG_HEALTHCHECK_DATABASE_N_IN_M<br>PLG_HEALTHCHECK_DATABASE_ZERODATES_PARTIAL',
             $zero['text']
         );
     }

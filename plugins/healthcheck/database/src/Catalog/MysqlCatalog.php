@@ -48,7 +48,9 @@ final class MysqlCatalog implements Catalog
                     $db->quoteName('TABLE_ROWS', 'rows'),
                     $db->quoteName('DATA_LENGTH', 'data_length'),
                     $db->quoteName('INDEX_LENGTH', 'index_length'),
-                    $db->quoteName('UPDATE_TIME', 'updated'),
+                    // UPDATE_TIME is a DATETIME in the session time zone, not UTC. UNIX_TIMESTAMP() reads it
+                    // back in that same zone, so the epoch is right on MySQL and MariaDB without time zone tables.
+                    'UNIX_TIMESTAMP(' . $db->quoteName('UPDATE_TIME') . ') AS ' . $db->quoteName('updated'),
                 ]
             )
             ->from($db->quoteName('information_schema.TABLES'))
@@ -67,7 +69,7 @@ final class MysqlCatalog implements Catalog
                 'name'    => (string) $row['name'],
                 'rows'    => $row['rows'] === null ? null : (int) $row['rows'],
                 'bytes'   => $bytes,
-                'updated' => $row['updated'] === null ? null : (string) $row['updated'],
+                'updated' => ($row['updated'] === null || (int) $row['updated'] <= 0) ? null : gmdate('Y-m-d H:i:s', (int) $row['updated']),
             ];
         }
 

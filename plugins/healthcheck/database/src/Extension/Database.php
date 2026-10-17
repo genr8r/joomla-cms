@@ -822,13 +822,12 @@ final class Database extends CMSPlugin implements SubscriberInterface
             $lines[] = Text::_('PLG_HEALTHCHECK_DATABASE_ZERODATES_NEVER');
         }
 
-        if ($updated !== null) {
-            $lines[] = Text::sprintf('PLG_HEALTHCHECK_DATABASE_ZERODATES_CHECKED', HTMLHelper::_('date', $updated, Text::_('DATE_FORMAT_LC5')));
-        }
-
+        // One status line: the progress while a pass is unfinished, otherwise when the last pass finished.
         if (empty($state['complete']) && ($state['pass'] ?? null) !== null) {
             $progress = ZeroDateScanner::progress($state);
             $lines[]  = Text::sprintf('PLG_HEALTHCHECK_DATABASE_ZERODATES_PARTIAL', $progress['checked'], $progress['total']);
+        } elseif ($updated !== null) {
+            $lines[] = Text::sprintf('PLG_HEALTHCHECK_DATABASE_ZERODATES_CHECKED', HTMLHelper::_('date.relative', $updated, null, null));
         }
 
         if ($ignored > 0) {
@@ -869,7 +868,7 @@ final class Database extends CMSPlugin implements SubscriberInterface
             'id'      => 'plg_healthcheck_database_unused',
             'section' => $section,
             'name'    => 'PLG_HEALTHCHECK_DATABASE_UNUSED_NAME',
-            'icon'    => 'icon-th-list',
+            'icon'    => 'icon-list',
             'link'    => '#',
             'onclick' => 'plgHealthcheckDatabaseUnused',
         ];

@@ -89,6 +89,29 @@ class CatalogTest extends IntegrationTestCase implements DBTestInterface
         $this->assertGreaterThan(0, $byName['jos84_hcdb_a']['bytes']);
     }
 
+    public function testUpdatedIsUtc(): void
+    {
+        if (!$this->isMysql()) {
+            $this->markTestSkipped('Only MySQL/MariaDB report a table update time.');
+        }
+
+        $db = $this->getDBDriver();
+        $a  = $db->quoteName('jos84_hcdb_a');
+        $this->exec('CREATE TABLE ' . $a . ' (id INT NOT NULL, PRIMARY KEY (id))');
+        $this->exec('INSERT INTO ' . $a . ' (id) VALUES (1)');
+
+        $updated = null;
+
+        foreach (CatalogFactory::for($db)->tables() as $row) {
+            if ($row['name'] === 'jos84_hcdb_a') {
+                $updated = $row['updated'];
+            }
+        }
+
+        $this->assertNotNull($updated);
+        $this->assertLessThan(300, abs(strtotime($updated . ' UTC') - time()), 'updated must be UTC, was ' . $updated);
+    }
+
     public function testDateColumnsAndZeroCount(): void
     {
         if (!$this->isMysql()) {

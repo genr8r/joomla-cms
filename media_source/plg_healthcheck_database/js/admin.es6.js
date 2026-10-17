@@ -246,6 +246,13 @@ const openDetails = async (trigger, kind, key, all) => {
     }
   });
 
+  // JoomlaDialog restores inline content to its original parent on destroy(); a detached element
+  // has none and throws, so park the content in a hidden holder first.
+  const holder = document.createElement('div');
+  holder.hidden = true;
+  holder.appendChild(content);
+  document.body.appendChild(holder);
+
   const dialog = new JoomlaDialog({
     popupType: 'inline',
     textHeader: escape(text(kind === 'zerodates' ? 'PLG_HEALTHCHECK_DATABASE_ZERODATES_NAME' : 'PLG_HEALTHCHECK_DATABASE_UNUSED_NAME')),
@@ -261,6 +268,7 @@ const openDetails = async (trigger, kind, key, all) => {
       window.location.reload();
     } else {
       dialog.destroy();
+      holder.remove();
     }
   });
 
