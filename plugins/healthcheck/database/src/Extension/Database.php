@@ -1,0 +1,696 @@
+<?php
+
+/**
+ * @package     Joomla.Plugin
+ * @subpackage  Healthcheck.Database
+ *
+ * @copyright   (C) 2026 Open Source Matters, Inc. <https://www.joomla.org>
+ * @license     GNU General Public License version 2 or later; see LICENSE.txt
+ */
+
+namespace Joomla\Plugin\Healthcheck\Database\Extension;
+
+use Joomla\CMS\Date\Date;
+use Joomla\CMS\Event\Plugin\AjaxEvent;
+use Joomla\CMS\HTML\HTMLHelper;
+use Joomla\CMS\Language\Text;
+use Joomla\CMS\Log\Log;
+use Joomla\CMS\Plugin\CMSPlugin;
+use Joomla\CMS\Session\Session;
+use Joomla\Database\DatabaseAwareTrait;
+use Joomla\Database\ParameterType;
+use Joomla\Event\SubscriberInterface;
+use Joomla\Input\Input;
+use Joomla\Module\Healthcheck\Administrator\Event\HealthChecksEvent;
+use Joomla\Plugin\Healthcheck\Database\Catalog\Catalog;
+use Joomla\Plugin\Healthcheck\Database\Catalog\CatalogFactory;
+use Joomla\Plugin\Healthcheck\Database\Ignore\IgnoreList;
+use Joomla\Plugin\Healthcheck\Database\Ignore\IgnoreRepository;
+use Joomla\Plugin\Healthcheck\Database\Ownership\TableOwnership;
+use Joomla\Plugin\Healthcheck\Database\Scan\ResultStore;
+use Joomla\Plugin\Healthcheck\Database\Scan\UnusedTables;
+use Joomla\Plugin\Healthcheck\Database\Scan\ZeroDateScanner;
+
+// phpcs:disable PSR1.Files.SideEffects
+\defined('_JEXEC') or die;
+// phpcs:enable PSR1.Files.SideEffects
+
+/**
+ * Health Check plugin showing database update problems, old zero dates and unused tables.
+ * Read-only toward the scanned database.
+ *
+ * @since  __DEPLOY_VERSION__
+ */
+final class Database extends CMSPlugin implements SubscriberInterface
+{
+    use DatabaseAwareTrait;
+
+    /**
+     * Strings used by the admin script
+     *
+     * @var    string[]
+     * @since  __DEPLOY_VERSION__
+     */
+    private const SCRIPT_STRINGS = [
+        'JCLOSE',
+        'PLG_HEALTHCHECK_DATABASE_CHECKNOW_DONE',
+        'PLG_HEALTHCHECK_DATABASE_CHECKNOW_PROGRESS',
+        'PLG_HEALTHCHECK_DATABASE_CHECKNOW_STARTING',
+        'PLG_HEALTHCHECK_DATABASE_DETAILS_TITLE',
+        'PLG_HEALTHCHECK_DATABASE_REQUEST_FAILED',
+    ];
+
+    /**
+     * Data for this request, loaded once
+     *
+     * @var    array|null
+     * @since  __DEPLOY_VERSION__
+     */
+    private ?array $data = null;
+
+    /**
+     * Whether the script options and strings were added to the page
+     *
+     * @var    boolean
+     * @since  __DEPLOY_VERSION__
+     */
+    private bool $assetsLoaded = false;
+
+    /**
+     * Constructor
+     *
+     * @param   array             $config     The plugin configuration
+     * @param   IgnoreRepository  $ignores    The ignore entries
+     * @param   ResultStore       $store      The cached scan results
+     * @param   TableOwnership    $ownership  Works out which tables the installed extensions account for
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    public function __construct(
+        array $config,
+        private readonly IgnoreRepository $ignores,
+        private readonly ResultStore $store,
+        private readonly TableOwnership $ownership
+    ) {
+        parent::__construct($config);
+    }
+
+    /**
+     * Returns an array of events this subscriber will listen to.
+     *
+     * @return  array
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    public static function getSubscribedEvents(): array
+    {
+        return [
+            'onHealthcheckGetIcons'  => 'onHealthcheckGetIcons',
+            'onHealthcheckGetTables' => 'onHealthcheckGetTables',
+            'onAjaxDatabase'         => 'onAjaxDatabase',
+        ];
+    }
+
+    /**
+     * Adds the schema, zero-date, unused-table and Check now icons.
+     *
+     * @param   HealthChecksEvent  $event  The health-check event object.
+     *
+     * @return  void
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    public function onHealthcheckGetIcons(HealthChecksEvent $event): void
+    {
+        if (!$this->isAllowed($event)) {
+            return;
+        }
+
+        $data    = $this->data();
+        $section = Text::_('PLG_HEALTHCHECK_DATABASE_SECTION');
+        $token   = Session::getFormToken();
+
+        $this->loadAssets($data);
+
+        $icons = [[
+            'id'      => 'plg_healthcheck_database_schema',
+            'section' => $section,
+            'name'    => 'PLG_HEALTHCHECK_DATABASE_SCHEMA_NAME',
+            'icon'    => 'icon-database',
+            'text'    => self::escape(Text::_('PLG_HEALTHCHECK_DATABASE_SCHEMA_TEXT')),
+            'link'    => 'index.php?option=com_installer&amp;view=database',
+            'ajaxurl' => 'index.php?option=com_ajax&amp;group=healthcheck&amp;plugin=database&amp;task=schema&amp;format=json&amp;' . $token . '=1',
+        ]];
+
+        if ($data['zeroDates']) {
+            $icons[] = $this->zeroDatesIcon($data, $section);
+        }
+
+        if ($data['unused']) {
+            $icons[] = $this->unusedIcon($data, $section);
+        }
+
+        if ($data['zeroDates'] || $data['unused']) {
+            $icons[] = [
+                'id'      => 'plg_healthcheck_database_checknow',
+                'section' => $section,
+                'name'    => 'PLG_HEALTHCHECK_DATABASE_CHECKNOW_NAME',
+                'icon'    => 'icon-sync',
+                'text'    => self::escape(Text::_('PLG_HEALTHCHECK_DATABASE_CHECKNOW_TEXT')),
+                'link'    => '#',
+                'onclick' => 'plgHealthcheckDatabaseCheckNow',
+            ];
+        }
+
+        $this->append($event, $icons);
+    }
+
+    /**
+     * Adds the table of open findings.
+     *
+     * @param   HealthChecksEvent  $event  The health-check event object.
+     *
+     * @return  void
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    public function onHealthcheckGetTables(HealthChecksEvent $event): void
+    {
+        if (!$this->isAllowed($event)) {
+            return;
+        }
+
+        $data = $this->data();
+        $rows = self::tableRows($data['groups'], $data['findings'], $data['prefix']);
+
+        if ($rows === []) {
+            return;
+        }
+
+        $this->loadAssets($data);
+
+        $labels = [
+            'finding' => Text::_('PLG_HEALTHCHECK_DATABASE_COLUMN_FINDING'),
+            'where'   => Text::_('PLG_HEALTHCHECK_DATABASE_COLUMN_WHERE'),
+            'count'   => Text::_('PLG_HEALTHCHECK_DATABASE_COLUMN_COUNT'),
+            'details' => Text::_('PLG_HEALTHCHECK_DATABASE_COLUMN_DETAILS'),
+        ];
+
+        $this->append($event, [[
+            'id'      => 'plg_healthcheck_database_table',
+            'section' => Text::_('PLG_HEALTHCHECK_DATABASE_SECTION'),
+            'caption' => Text::_('PLG_HEALTHCHECK_DATABASE_TABLE_CAPTION'),
+            'status'  => 'warning',
+            'columns' => self::columns($labels),
+            'data'    => $rows,
+        ]]);
+    }
+
+    /**
+     * Ajax entry point for the dashboard: one handler per task behind a shared guard.
+     *
+     * @param   AjaxEvent  $event  The Ajax event
+     *
+     * @return  void
+     *
+     * @throws  \RuntimeException  On a missing token or permission (403), a wrong method (405) or an unknown task (400)
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    public function onAjaxDatabase(AjaxEvent $event): void
+    {
+        $app = $this->getApplication();
+
+        if (!$app->isClient('administrator') || !Session::checkToken('get') || !$app->getIdentity()->authorise('core.admin')) {
+            throw new \RuntimeException(Text::_('JERROR_ALERTNOAUTHOR'), 403);
+        }
+
+        $this->loadLanguage();
+
+        $input    = $app->getInput();
+        $handlers = $this->ajaxHandlers();
+        $task     = (string) $input->getCmd('task');
+
+        if (!isset($handlers[$task])) {
+            throw new \RuntimeException('Unknown task', 400);
+        }
+
+        [$postOnly, $handler] = $handlers[$task];
+
+        if ($postOnly && strtoupper($input->getMethod()) !== 'POST') {
+            throw new \RuntimeException('Method not allowed', 405);
+        }
+
+        $event->addResult($handler($input));
+    }
+
+    /**
+     * Rows of the findings table: one per prefix group with open tables (own group first), then one per
+     * table with open zero-date columns. Ignored items are left out.
+     *
+     * @param   array   $groups        The result of UnusedTables::groups()
+     * @param   array   $zeroFindings  The result of ZeroDateScanner::findings()
+     * @param   string  $sitePrefix    The site's table prefix
+     *
+     * @return  list<array{finding:string, where:string, count:int, kind:string, key:string}>
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    public static function tableRows(array $groups, array $zeroFindings, string $sitePrefix): array
+    {
+        $rows = [];
+
+        foreach ($groups as $group) {
+            $open = \count(array_filter($group['tables'], static fn (array $table): bool => !$table['ignored']));
+
+            if ($open === 0) {
+                continue;
+            }
+
+            $prefix = (string) $group['prefix'];
+            $own    = !empty($group['own']);
+
+            $rows[] = [
+                'finding' => Text::_($own ? 'PLG_HEALTHCHECK_DATABASE_FINDING_UNUSED' : 'PLG_HEALTHCHECK_DATABASE_FINDING_UNUSED_OTHER'),
+                'where'   => $prefix === '' ? Text::_('PLG_HEALTHCHECK_DATABASE_WHERE_NO_PREFIX') : $prefix,
+                'count'   => $open,
+                'kind'    => 'unused',
+                'key'     => $own ? $sitePrefix : $prefix,
+            ];
+        }
+
+        $tables = [];
+
+        foreach ($zeroFindings as $finding) {
+            if ($finding['ignored']) {
+                continue;
+            }
+
+            $key = strtolower((string) $finding['table']);
+
+            $tables[$key] ??= ['table' => (string) $finding['table'], 'count' => 0];
+            $tables[$key]['count']++;
+        }
+
+        foreach ($tables as $table) {
+            $rows[] = [
+                'finding' => Text::_('PLG_HEALTHCHECK_DATABASE_FINDING_ZERODATES'),
+                'where'   => $table['table'],
+                'count'   => $table['count'],
+                'kind'    => 'zerodates',
+                'key'     => $table['table'],
+            ];
+        }
+
+        return $rows;
+    }
+
+    /**
+     * Columns of the findings table. Every custom renderer escapes what it prints.
+     *
+     * @param   array  $labels  Translated labels: finding, where, count, details
+     *
+     * @return  array
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    public static function columns(array $labels): array
+    {
+        return [
+            [
+                'key'      => 'finding',
+                'title'    => $labels['finding'],
+                'type'     => 'custom',
+                'renderer' => static fn ($value): string => self::escape($value),
+            ],
+            [
+                'key'      => 'where',
+                'title'    => $labels['where'],
+                'type'     => 'custom',
+                'renderer' => static fn ($value): string => '<code>' . self::escape($value) . '</code>',
+            ],
+            [
+                'key'        => 'count',
+                'title'      => $labels['count'],
+                'type'       => 'badge',
+                'badgeClass' => 'warning',
+            ],
+            [
+                'key'      => 'details',
+                'title'    => $labels['details'],
+                'type'     => 'custom',
+                'renderer' => static fn ($value, $item): string => '<button type="button" class="btn btn-sm btn-outline-secondary plg-hc-db-details"'
+                    . ' data-hc-db-kind="' . self::escape($item['kind'] ?? '') . '"'
+                    . ' data-hc-db-key="' . self::escape($item['key'] ?? '') . '">'
+                    . self::escape($labels['details']) . '</button>',
+            ],
+        ];
+    }
+
+    /**
+     * Task handlers: task => [POST only, handler(Input): array].
+     *
+     * @return  array<string, array{0:bool, 1:\Closure}>
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    private function ajaxHandlers(): array
+    {
+        return [
+            'schema' => [false, fn (Input $input): array => $this->schemaResult()],
+        ];
+    }
+
+    /**
+     * Extensions with database update problems, from core's own check in Extensions > Database.
+     *
+     * @return  array{amount:int, status:string}
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    private function schemaResult(): array
+    {
+        $model = $this->getApplication()->bootComponent('com_installer')->getMVCFactory()
+            ->createModel('Database', 'Administrator', ['ignore_request' => true]);
+
+        $count = \count(array_filter(
+            $model->getItems() ?: [],
+            static fn ($item): bool => (int) ($item['errorsCount'] ?? 0) > 0
+        ));
+
+        return ['amount' => $count, 'status' => $count > 0 ? 'warning' : 'success'];
+    }
+
+    /**
+     * Rebuild the unused-table inputs (catalog tables and the accounted names) and store them.
+     *
+     * @param   Catalog  $catalog  The catalog
+     * @param   string   $now      Current time (Y-m-d H:i:s, UTC)
+     *
+     * @return  array{updated:string, tables:array, accounted:string[]}
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    private function refreshUnused(Catalog $catalog, string $now): array
+    {
+        $db    = $this->getDatabase();
+        $query = $db->createQuery()
+            ->select($db->quoteName(['type', 'element', 'folder', 'client_id']))
+            ->from($db->quoteName('#__extensions'))
+            ->whereIn($db->quoteName('type'), ['component', 'module', 'plugin'], ParameterType::STRING);
+
+        $value = [
+            'updated'   => $now,
+            'tables'    => $catalog->tables(),
+            'accounted' => $this->ownership->accounted($db->setQuery($query)->loadObjectList() ?: []),
+        ];
+
+        $this->store->put('unused', $value);
+
+        return $value;
+    }
+
+    /**
+     * Results for this request, loaded once. Never runs the zero-date scan.
+     *
+     * @return  array
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    private function data(): array
+    {
+        if ($this->data !== null) {
+            return $this->data;
+        }
+
+        $db    = $this->getDatabase();
+        $now   = (new Date())->toSql();
+        $hours = max(1, min(168, (int) $this->params->get('refresh_hours', 24)));
+
+        $data = [
+            'prefix'     => $db->getPrefix(),
+            'zeroDates'  => false,
+            'unused'     => false,
+            'unusedFail' => false,
+            'groups'     => [],
+            'state'      => ZeroDateScanner::emptyState(),
+            'findings'   => [],
+            'ignores'    => new IgnoreList([]),
+            'due'        => false,
+        ];
+
+        try {
+            $data['ignores'] = new IgnoreList($this->ignores->all());
+        } catch (\Throwable $e) {
+            Log::add('Database Health Check: could not read the ignore list: ' . $e->getMessage(), Log::WARNING, 'healthcheck');
+        }
+
+        try {
+            $catalog = CatalogFactory::for($db);
+        } catch (\Throwable $e) {
+            Log::add('Database Health Check: ' . $e->getMessage(), Log::WARNING, 'healthcheck');
+
+            return $this->data = $data;
+        }
+
+        if ($this->params->get('check_unused', 1)) {
+            $data['unused'] = true;
+            $stored         = $this->store->get('unused');
+
+            if ($stored === null || ResultStore::isStale($stored['updated'] ?? null, $hours, $now)) {
+                try {
+                    $stored = $this->refreshUnused($catalog, $now);
+                } catch (\Throwable $e) {
+                    Log::add('Database Health Check: could not list the tables: ' . $e->getMessage(), Log::WARNING, 'healthcheck');
+                }
+            }
+
+            if ($stored === null) {
+                $data['unusedFail'] = true;
+            } else {
+                $data['groups'] = UnusedTables::groups($stored['tables'] ?? [], $stored['accounted'] ?? [], $data['prefix'], $data['ignores']);
+            }
+        }
+
+        try {
+            $data['zeroDates'] = (bool) $this->params->get('check_zerodates', 1) && $catalog->supportsZeroDates();
+        } catch (\Throwable $e) {
+            Log::add('Database Health Check: ' . $e->getMessage(), Log::WARNING, 'healthcheck');
+        }
+
+        if ($data['zeroDates']) {
+            $data['state']    = $this->store->get('zerodates') ?? ZeroDateScanner::emptyState();
+            $data['findings'] = ZeroDateScanner::findings($data['state'], $data['ignores']);
+            $data['due']      = ResultStore::isStale($data['state']['updated'] ?? null, $hours, $now) || empty($data['state']['complete']);
+        }
+
+        return $this->data = $data;
+    }
+
+    /**
+     * The zero-date icon.
+     *
+     * @param   array   $data     Data for this request
+     * @param   string  $section  Section label
+     *
+     * @return  array
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    private function zeroDatesIcon(array $data, string $section): array
+    {
+        $state    = $data['state'];
+        $findings = $data['findings'];
+        $open     = array_filter($findings, static fn (array $finding): bool => !$finding['ignored']);
+        $ignored  = \count($findings) - \count($open);
+        $tables   = \count(array_unique(array_map(static fn (array $finding): string => strtolower($finding['table']), $open)));
+        $updated  = $state['updated'] ?? null;
+        $never    = $updated === null && empty($state['results']);
+        $lines    = [];
+
+        if ($open) {
+            $lines[] = Text::sprintf('PLG_HEALTHCHECK_DATABASE_ZERODATES_SUMMARY', \count($open), $tables);
+        } elseif (!$never) {
+            $lines[] = Text::_('PLG_HEALTHCHECK_DATABASE_ZERODATES_NONE');
+        } elseif (($state['pass'] ?? null) === null) {
+            $lines[] = Text::_('PLG_HEALTHCHECK_DATABASE_ZERODATES_NEVER');
+        }
+
+        if ($updated !== null) {
+            $lines[] = Text::sprintf('PLG_HEALTHCHECK_DATABASE_ZERODATES_CHECKED', HTMLHelper::_('date', $updated, Text::_('DATE_FORMAT_LC5')));
+        }
+
+        if (empty($state['complete']) && ($state['pass'] ?? null) !== null) {
+            $progress = ZeroDateScanner::progress($state);
+            $lines[]  = Text::sprintf('PLG_HEALTHCHECK_DATABASE_ZERODATES_PARTIAL', $progress['checked'], $progress['total']);
+        }
+
+        if ($ignored > 0) {
+            $lines[] = Text::plural('PLG_HEALTHCHECK_DATABASE_IGNORED', $ignored);
+        }
+
+        $icon = [
+            'id'      => 'plg_healthcheck_database_zerodates',
+            'section' => $section,
+            'name'    => 'PLG_HEALTHCHECK_DATABASE_ZERODATES_NAME',
+            'icon'    => 'icon-calendar',
+            'text'    => self::lines($lines),
+            'link'    => '#',
+            'onclick' => 'plgHealthcheckDatabaseZeroDates',
+        ];
+
+        if (!$never) {
+            $icon['amount'] = \count($open);
+            $icon['status'] = $open ? 'warning' : 'success';
+        }
+
+        return $icon;
+    }
+
+    /**
+     * The unused-table icon.
+     *
+     * @param   array   $data     Data for this request
+     * @param   string  $section  Section label
+     *
+     * @return  array
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    private function unusedIcon(array $data, string $section): array
+    {
+        $icon = [
+            'id'      => 'plg_healthcheck_database_unused',
+            'section' => $section,
+            'name'    => 'PLG_HEALTHCHECK_DATABASE_UNUSED_NAME',
+            'icon'    => 'icon-th-list',
+            'link'    => '#',
+            'onclick' => 'plgHealthcheckDatabaseUnused',
+        ];
+
+        if ($data['unusedFail']) {
+            $icon['text'] = self::escape(Text::_('PLG_HEALTHCHECK_DATABASE_UNAVAILABLE'));
+
+            return $icon;
+        }
+
+        $groups   = $data['groups'];
+        $open     = UnusedTables::openCount($groups);
+        $ignored  = UnusedTables::ignoredCount($groups);
+        $withOpen = \count(array_filter(
+            $groups,
+            static fn (array $group): bool => (bool) array_filter($group['tables'], static fn (array $table): bool => !$table['ignored'])
+        ));
+
+        $lines = [$open > 0
+            ? Text::sprintf('PLG_HEALTHCHECK_DATABASE_UNUSED_SUMMARY', $open, $withOpen)
+            : Text::_('PLG_HEALTHCHECK_DATABASE_UNUSED_NONE')];
+
+        if ($ignored > 0) {
+            $lines[] = Text::plural('PLG_HEALTHCHECK_DATABASE_IGNORED', $ignored);
+        }
+
+        return $icon + [
+            'amount' => $open,
+            'text'   => self::lines($lines),
+            'status' => $open > 0 ? 'warning' : 'success',
+        ];
+    }
+
+    /**
+     * Add the script options and strings to the page, once. The admin script itself is added by the asset (Task 7).
+     *
+     * @param   array  $data  Data for this request
+     *
+     * @return  void
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    private function loadAssets(array $data): void
+    {
+        if ($this->assetsLoaded) {
+            return;
+        }
+
+        $this->assetsLoaded = true;
+        $document           = $this->getApplication()->getDocument();
+
+        if (!$document) {
+            return;
+        }
+
+        $document->addScriptOptions('plg_healthcheck_database', [
+            'ajax'         => 'index.php?option=com_ajax&group=healthcheck&plugin=database&format=json',
+            'token'        => Session::getFormToken(),
+            'zeroDatesDue' => $data['zeroDates'] && $data['due'],
+        ]);
+
+        foreach (self::SCRIPT_STRINGS as $key) {
+            Text::script($key);
+        }
+    }
+
+    /**
+     * Right context and a Super User.
+     *
+     * @param   HealthChecksEvent  $event  The health-check event object.
+     *
+     * @return  boolean
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    private function isAllowed(HealthChecksEvent $event): bool
+    {
+        if ($event->getContext() !== $this->params->get('context', 'general') || !$this->getApplication()->getIdentity()->authorise('core.admin')) {
+            return false;
+        }
+
+        $this->loadLanguage();
+
+        return true;
+    }
+
+    /**
+     * Escape text lines and join them for an icon.
+     *
+     * @param   string[]  $lines  Plain text lines
+     *
+     * @return  string
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    private static function lines(array $lines): string
+    {
+        return implode('<br>', array_map(static fn (string $line): string => self::escape($line), $lines));
+    }
+
+    /**
+     * @param   mixed  $value  A value to print in HTML
+     *
+     * @return  string
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    private static function escape($value): string
+    {
+        return htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8');
+    }
+
+    /**
+     * Append one group of layout items to the event result.
+     *
+     * @param   HealthChecksEvent  $event  The event
+     * @param   array              $items  Items for the layout
+     *
+     * @return  void
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    private function append(HealthChecksEvent $event, array $items): void
+    {
+        $result   = $event->getArgument('result', []);
+        $result[] = $items;
+
+        $event->setArgument('result', $result);
+    }
+}
