@@ -22,6 +22,8 @@ namespace Joomla\Plugin\Healthcheck\Database\Ownership;
 final class TableOwnership
 {
     /**
+     * Constructor
+     *
      * @param   string  $siteRoot   The site root folder (JPATH_ROOT)
      * @param   string  $adminRoot  The administrator folder (JPATH_ADMINISTRATOR)
      *
@@ -62,6 +64,9 @@ final class TableOwnership
     }
 
     /**
+     * The install SQL files and the update files of the manifest's schema paths, or of the
+     * `sql/updates/<driver>` folders when the manifest names none.
+     *
      * @param   object  $extension  The extension row
      *
      * @return  string[]  Real paths of the `.sql` files inside the extension folder
@@ -123,8 +128,17 @@ final class TableOwnership
             $this->addFile($files, $realBase, (string) $node);
         }
 
-        foreach ($xml->xpath('//update/schemas/schemapath') ?: [] as $node) {
-            $dir = $this->inside($realBase, (string) $node);
+        $folders = array_map('strval', $xml->xpath('//update/schemas/schemapath') ?: []);
+
+        // Without a schemapath, core's DatabaseModel reads <base>/sql/updates/<driver>: do the same.
+        if ($folders === []) {
+            foreach (glob($realBase . '/sql/updates/*', GLOB_ONLYDIR) ?: [] as $dir) {
+                $folders[] = substr($dir, \strlen($realBase) + 1);
+            }
+        }
+
+        foreach ($folders as $folder) {
+            $dir = $this->inside($realBase, $folder);
 
             if ($dir === null || !is_dir($dir)) {
                 continue;
@@ -139,6 +153,8 @@ final class TableOwnership
     }
 
     /**
+     * Add a manifest-relative path when it is a .sql file inside the extension folder.
+     *
      * @param   array   $files     Collected real paths, keyed by path
      * @param   string  $realBase  Real path of the extension folder
      * @param   string  $relative  Path from the manifest
@@ -157,6 +173,8 @@ final class TableOwnership
     }
 
     /**
+     * Resolve a path relative to the extension folder, refusing anything that leaves it.
+     *
      * @param   string  $realBase  Real path of the extension folder
      * @param   string  $relative  Path relative to it
      *

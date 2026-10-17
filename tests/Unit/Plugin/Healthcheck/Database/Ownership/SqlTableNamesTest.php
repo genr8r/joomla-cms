@@ -23,6 +23,8 @@ use PHPUnit\Framework\Attributes\TestDox;
 class SqlTableNamesTest extends UnitTestCase
 {
     /**
+     * CREATE TABLE with backticks, double quotes, brackets, IF NOT EXISTS and LIKE.
+     *
      * @return  void
      *
      * @since   __DEPLOY_VERSION__
@@ -38,6 +40,8 @@ class SqlTableNamesTest extends UnitTestCase
     }
 
     /**
+     * RENAME TABLE and ALTER TABLE ... RENAME TO name the new table.
+     *
      * @return  void
      *
      * @since   __DEPLOY_VERSION__
@@ -51,6 +55,21 @@ class SqlTableNamesTest extends UnitTestCase
     }
 
     /**
+     * A statement continued on the next line, which starts with `#__`, is not a `#` comment.
+     *
+     * @return  void
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    public function testLineStartPrefixContinuation(): void
+    {
+        $this->assertSame(['#__new'], SqlTableNames::fromSql("RENAME TABLE\n#__old TO #__new;"));
+        $this->assertSame(['#__b'], SqlTableNames::fromSql("CREATE TABLE\n#__b (id int);"));
+    }
+
+    /**
+     * Statements inside comments are not read.
+     *
      * @return  void
      *
      * @since   __DEPLOY_VERSION__
@@ -65,6 +84,8 @@ class SqlTableNamesTest extends UnitTestCase
     }
 
     /**
+     * Several statements on one line are all read.
+     *
      * @return  void
      *
      * @since   __DEPLOY_VERSION__
@@ -77,6 +98,8 @@ class SqlTableNamesTest extends UnitTestCase
     }
 
     /**
+     * Only names with the #__ placeholder count.
+     *
      * @return  void
      *
      * @since   __DEPLOY_VERSION__
@@ -87,6 +110,8 @@ class SqlTableNamesTest extends UnitTestCase
     }
 
     /**
+     * Each name is returned once, lowercased.
+     *
      * @return  void
      *
      * @since   __DEPLOY_VERSION__

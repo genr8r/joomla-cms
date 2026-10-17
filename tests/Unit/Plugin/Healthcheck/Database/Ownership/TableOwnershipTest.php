@@ -23,6 +23,8 @@ use PHPUnit\Framework\Attributes\TestDox;
 class TableOwnershipTest extends UnitTestCase
 {
     /**
+     * An #__extensions row.
+     *
      * @param   string  $type     Extension type
      * @param   string  $element  Element
      * @param   string  $folder   Plugin folder
@@ -38,6 +40,8 @@ class TableOwnershipTest extends UnitTestCase
     }
 
     /**
+     * An ownership reader over the fixture site.
+     *
      * @return  TableOwnership
      *
      * @since   __DEPLOY_VERSION__
@@ -62,6 +66,15 @@ class TableOwnershipTest extends UnitTestCase
         $this->assertContains('#__foo_items', $names);
         $this->assertContains('#__foo_log', $names);
         $this->assertSame($names, array_values(array_unique($names)));
+    }
+
+    #[TestDox('Without a schemapath in the manifest, the update files in sql/updates/<driver> count, as in core')]
+    public function testDefaultUpdateFolders(): void
+    {
+        $names = $this->ownership()->accounted([$this->extension('component', 'com_bar')]);
+
+        $this->assertContains('#__bar_items', $names);
+        $this->assertContains('#__bar_pg', $names);
     }
 
     #[TestDox('Extension types without a known location are skipped')]
