@@ -79,6 +79,8 @@ class IgnoreRepositoryTest extends IntegrationTestCase implements DBTestInterfac
         $this->assertFalse($this->repo->add('table', 'x; DROP TABLE y', 1, '2026-10-17 10:00:00'));
         $this->assertFalse($this->repo->add('prefix', 'kiufs', 1, '2026-10-17 10:00:00'));
         $this->assertFalse($this->repo->add('table', str_repeat('a', 129), 1, '2026-10-17 10:00:00'));
+        $this->assertFalse($this->repo->add('table', "hc_orphan\n", 1, '2026-10-17 10:00:00'));
+        $this->assertFalse($this->repo->add('table', str_repeat('a', 128) . "\n", 1, '2026-10-17 10:00:00'));
 
         $this->assertSame([], $this->repo->all());
     }

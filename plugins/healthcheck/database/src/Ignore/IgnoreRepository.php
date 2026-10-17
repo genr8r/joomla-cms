@@ -36,7 +36,7 @@ final class IgnoreRepository
      * @var    string
      * @since  __DEPLOY_VERSION__
      */
-    private const NAME_PATTERN = '/^[A-Za-z0-9_$.]{1,128}$/';
+    private const NAME_PATTERN = '/^[A-Za-z0-9_$.]{1,128}$/D';
 
     /**
      * @param   DatabaseInterface  $db  The Joomla database
@@ -115,7 +115,9 @@ final class IgnoreRepository
             $db->setQuery($query)->execute();
         } catch (ExecutionFailureException $e) {
             // A concurrent request won the unique key: the entry is there, which is what was asked.
-            return $this->exists($kind, $name);
+            if (!$this->exists($kind, $name)) {
+                throw $e;
+            }
         }
 
         return true;
