@@ -63,6 +63,7 @@ final class CoreTables
         '#__finder_types',
         '#__guidedtour_steps',
         '#__guidedtours',
+        '#__healthcheck_database_ignored',
         '#__history',
         '#__languages',
         '#__mail_templates',
