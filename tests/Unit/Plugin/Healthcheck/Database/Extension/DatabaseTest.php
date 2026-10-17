@@ -781,18 +781,22 @@ class DatabaseTest extends UnitTestCase
     public function testStaleUnusedRefreshesInBackground(): void
     {
         $unused   = ['updated' => '2000-01-01 00:00:00', 'tables' => $this->tables(['hc_orphan']), 'accounted' => []];
-        $document = $this->document();
-        $icons    = $this->icons($this->plugin(['check_zerodates' => 0], ['unused' => $unused], ['document' => $document]));
-
-        $this->assertSame(1, $icons['plg_healthcheck_database_unused']['amount']);
-        $this->assertSame(0, $this->queries, 'no synchronous rebuild');
-        $this->assertTrue($document->getScriptOptions('plg_healthcheck_database')['unusedDue']);
-
         $fresh    = ['updated' => (new Date())->toSql()] + $unused;
         $document = $this->document();
         $this->icons($this->plugin(['check_zerodates' => 0], ['unused' => $fresh], ['document' => $document]));
 
+        // A fresh list only reads the ignore entries; a stale one must not query more (no inline rebuild).
+        $freshQueries  = $this->queries;
+        $this->queries = 0;
+
         $this->assertFalse($document->getScriptOptions('plg_healthcheck_database')['unusedDue']);
+
+        $document = $this->document();
+        $icons    = $this->icons($this->plugin(['check_zerodates' => 0], ['unused' => $unused], ['document' => $document]));
+
+        $this->assertSame(1, $icons['plg_healthcheck_database_unused']['amount']);
+        $this->assertSame($freshQueries, $this->queries, 'no synchronous rebuild');
+        $this->assertTrue($document->getScriptOptions('plg_healthcheck_database')['unusedDue']);
     }
 
     #[TestDox('Without zero dates, Check now says it re-runs the unused-table check only')]

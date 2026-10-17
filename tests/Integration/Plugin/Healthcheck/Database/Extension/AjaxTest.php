@@ -256,7 +256,7 @@ class AjaxTest extends IntegrationTestCase implements DBTestInterface
         $this->assertSame(['ok' => true], $this->ajax('POST', ['task' => 'ignore'], ['kind' => 'table', 'name' => $table]));
         $this->assertSame(['ok' => true], $this->ajax('POST', ['task' => 'ignore'], ['kind' => 'column', 'name' => 'x_content.created']));
         $this->assertSame(['ok' => true], $this->ajax('POST', ['task' => 'ignore'], ['kind' => 'prefix', 'name' => 'kiufs_']));
-        $this->assertSame(['ok' => false], $this->ajax('POST', ['task' => 'ignore'], ['kind' => 'table', 'name' => 'x; DROP TABLE y']));
+        $this->assertSame(['ok' => false], $this->ajax('POST', ['task' => 'ignore'], ['kind' => 'table', 'name' => "x\x00y"]));
 
         $this->assertSame([
             ['table', strtolower($table), 42],

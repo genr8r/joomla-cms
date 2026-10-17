@@ -399,7 +399,7 @@ CREATE TABLE IF NOT EXISTS `#__webauthn_credentials` (
 CREATE TABLE IF NOT EXISTS `#__healthcheck_database_ignored` (
   `id` int unsigned NOT NULL AUTO_INCREMENT,
   `kind` varchar(10) NOT NULL,
-  `name` varchar(128) NOT NULL,
+  `name` varchar(255) NOT NULL,
   `created_by` int unsigned NOT NULL DEFAULT 0,
   `created` datetime NOT NULL,
   PRIMARY KEY (`id`),

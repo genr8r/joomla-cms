@@ -64,23 +64,46 @@ class IgnoreRepositoryTest extends IntegrationTestCase implements DBTestInterfac
         $this->assertTrue($this->repo->add('column', 'Jos_Content.created', 1, '2026-10-17 10:00:00'));
         $this->assertTrue($this->repo->add('prefix', 'kiufs_', 1, '2026-10-17 10:00:00'));
         $this->assertFalse($this->repo->add('column', 'nodot', 1, '2026-10-17 10:00:00'));
-        $this->assertFalse($this->repo->add('column', 'a.b.c', 1, '2026-10-17 10:00:00'));
-        $this->assertFalse($this->repo->add('table', 'a.b', 1, '2026-10-17 10:00:00'));
+        $this->assertFalse($this->repo->add('column', '.created', 1, '2026-10-17 10:00:00'));
+        $this->assertFalse($this->repo->add('column', 'jos_content.', 1, '2026-10-17 10:00:00'));
         $this->assertFalse($this->repo->add('prefix', 'a.b_', 1, '2026-10-17 10:00:00'));
+
+        // A column splits on the last dot: table `a.b`, column `c`.
+        $this->assertTrue($this->repo->add('column', 'a.b.c', 1, '2026-10-17 10:00:00'));
 
         $names = array_column($this->repo->all(), 'name');
         sort($names);
-        $this->assertSame(['jos_content.created', 'kiufs_'], $names);
+        $this->assertSame(['a.b.c', 'jos_content.created', 'kiufs_'], $names);
+    }
+
+    public function testAcceptsAnyTableName(): void
+    {
+        $longColumn = str_repeat('t', 64) . '.' . str_repeat('c', 64);
+        $longest    = str_repeat('a', 255);
+
+        $this->assertTrue($this->repo->add('table', 'hc_my-component_items', 1, '2026-10-17 10:00:00'));
+        $this->assertTrue($this->repo->add('table', '#__content', 1, '2026-10-17 10:00:00'));
+        $this->assertTrue($this->repo->add('table', 'a.b', 1, '2026-10-17 10:00:00'));
+        $this->assertTrue($this->repo->add('table', 'x; DROP TABLE y', 1, '2026-10-17 10:00:00'));
+        $this->assertTrue($this->repo->add('column', $longColumn, 1, '2026-10-17 10:00:00'));
+        $this->assertTrue($this->repo->add('table', $longest, 1, '2026-10-17 10:00:00'));
+
+        $names = array_column($this->repo->all(), 'name');
+        sort($names);
+        $this->assertSame(['#__content', 'a.b', $longest, 'hc_my-component_items', $longColumn, 'x; drop table y'], $names);
     }
 
     public function testRejectsInvalid(): void
     {
         $this->assertFalse($this->repo->add('drop', 'hc_orphan', 1, '2026-10-17 10:00:00'));
-        $this->assertFalse($this->repo->add('table', 'x; DROP TABLE y', 1, '2026-10-17 10:00:00'));
+        $this->assertFalse($this->repo->add('table', '', 1, '2026-10-17 10:00:00'));
         $this->assertFalse($this->repo->add('prefix', 'kiufs', 1, '2026-10-17 10:00:00'));
-        $this->assertFalse($this->repo->add('table', str_repeat('a', 129), 1, '2026-10-17 10:00:00'));
+        $this->assertFalse($this->repo->add('table', str_repeat('a', 256), 1, '2026-10-17 10:00:00'));
         $this->assertFalse($this->repo->add('table', "hc_orphan\n", 1, '2026-10-17 10:00:00'));
-        $this->assertFalse($this->repo->add('table', str_repeat('a', 128) . "\n", 1, '2026-10-17 10:00:00'));
+        $this->assertFalse($this->repo->add('table', "hc_\x01orphan", 1, '2026-10-17 10:00:00'));
+        $this->assertFalse($this->repo->add('table', "hc_orphan\x7F", 1, '2026-10-17 10:00:00'));
+        $this->assertFalse($this->repo->add('table', str_repeat('a', 255) . "\n", 1, '2026-10-17 10:00:00'));
+        $this->assertFalse($this->repo->add('table', "hc_\xC3", 1, '2026-10-17 10:00:00'));
 
         $this->assertSame([], $this->repo->all());
     }

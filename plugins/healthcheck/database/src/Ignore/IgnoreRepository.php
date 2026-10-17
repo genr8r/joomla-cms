@@ -27,16 +27,29 @@ use Joomla\Database\ParameterType;
 final class IgnoreRepository
 {
     /**
+     * The plugin's own table, its only write target.
+     *
      * @var    string
      * @since  __DEPLOY_VERSION__
      */
     private const TABLE = '#__healthcheck_database_ignored';
 
     /**
+     * Longest name in characters, the size of the `name` column.
+     *
+     * @var    integer
+     * @since  __DEPLOY_VERSION__
+     */
+    public const MAX_NAME = 255;
+
+    /**
+     * Any characters but control characters, valid UTF-8. Names are always bound, never put in SQL text,
+     * so a table with a hyphen, a literal `#__` or a 64 + 1 + 64 character table.column can be ignored too.
+     *
      * @var    string
      * @since  __DEPLOY_VERSION__
      */
-    private const NAME_PATTERN = '/^[A-Za-z0-9_$.]{1,128}$/D';
+    private const NAME_PATTERN = '/^[^\x00-\x1F\x7F]{1,' . self::MAX_NAME . '}$/uD';
 
     /**
      * @param   DatabaseInterface  $db  The Joomla database
@@ -57,7 +70,7 @@ final class IgnoreRepository
     public function all(): array
     {
         $db    = $this->db;
-        $query = $db->getQuery(true)
+        $query = $db->createQuery()
             ->select($db->quoteName(['kind', 'name', 'created_by', 'created']))
             ->from($db->quoteName(self::TABLE))
             ->order($db->quoteName('id'));
@@ -102,7 +115,7 @@ final class IgnoreRepository
 
         $db      = $this->db;
         $columns = ['kind', 'name', 'created_by', 'created'];
-        $query   = $db->getQuery(true)
+        $query   = $db->createQuery()
             ->insert($db->quoteName(self::TABLE))
             ->columns($db->quoteName($columns))
             ->values(':kind, :name, :createdby, :created')
@@ -137,7 +150,7 @@ final class IgnoreRepository
     {
         $name  = strtolower($name);
         $db    = $this->db;
-        $query = $db->getQuery(true)
+        $query = $db->createQuery()
             ->delete($db->quoteName(self::TABLE))
             ->where($db->quoteName('kind') . ' = :kind')
             ->where($db->quoteName('name') . ' = :name')
@@ -162,7 +175,7 @@ final class IgnoreRepository
     private function exists(string $kind, string $name): bool
     {
         $db    = $this->db;
-        $query = $db->getQuery(true)
+        $query = $db->createQuery()
             ->select($db->quoteName('id'))
             ->from($db->quoteName(self::TABLE))
             ->where($db->quoteName('kind') . ' = :kind')
@@ -177,6 +190,9 @@ final class IgnoreRepository
      * Whether the kind and name are acceptable for an ignore entry. The Details popup uses it to offer
      * Ignore only where add() would accept it.
      *
+     * A table may hold any characters but control characters. A column is `table.column`, split on the last
+     * dot, both sides non-empty. A prefix ends with `_` and has no dot.
+     *
      * @param   string  $kind  The kind
      * @param   string  $name  The name
      *
@@ -190,12 +206,12 @@ final class IgnoreRepository
             return false;
         }
 
-        $dots = substr_count($name, '.');
+        $lastDot = strrpos($name, '.');
 
         return match ($kind) {
-            'table'  => $dots === 0,
-            'column' => $dots === 1 && $name[0] !== '.' && !str_ends_with($name, '.'),
-            'prefix' => $dots === 0 && str_ends_with($name, '_'),
+            'table'  => true,
+            'column' => $lastDot !== false && $lastDot > 0 && $lastDot < \strlen($name) - 1,
+            'prefix' => $lastDot === false && str_ends_with($name, '_'),
             default  => false,
         };
     }
