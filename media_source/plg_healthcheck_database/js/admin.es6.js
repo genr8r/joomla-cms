@@ -4,7 +4,7 @@
  */
 
 /**
- * Health Check - Database: Check now, the automatic zero-date refresh, the schema tile text, and the
+ * Health Check - Database: Check now, the automatic background refreshes, the schema tile text, and the
  * Details dialog with its Ignore / Reopen actions.
  *
  * Table and column names come from the database. The details HTML is escaped by the server and
@@ -77,6 +77,13 @@ const setIconText = (icon, value) => {
   target.textContent = value;
 };
 
+// A batch that could not check a table: stop, the next batch would only fail on the same table.
+const stopOnError = (result) => {
+  if (result.error) {
+    throw new Error(text('PLG_HEALTHCHECK_DATABASE_CHECKNOW_ERROR'));
+  }
+};
+
 /**
  * Run zero-date batches until the pass is complete. Every batch checks at least one table, so a
  * batch that makes no progress means another request restarted the pass: stop rather than loop.
@@ -84,12 +91,14 @@ const setIconText = (icon, value) => {
 const zeroDatesPass = async (restart, onProgress) => {
   let result = await post('zerodates', { restart: restart ? '1' : '0' });
   onProgress(result);
+  stopOnError(result);
 
   while (!result.complete) {
     const previous = result;
 
     result = await post('zerodates', { restart: '0' });
     onProgress(result);
+    stopOnError(result);
 
     if (!result.complete && result.checked <= previous.checked && result.total === previous.total) {
       throw new Error(text('PLG_HEALTHCHECK_DATABASE_CHECKNOW_STALLED'));
@@ -101,7 +110,7 @@ const zeroDatesPass = async (restart, onProgress) => {
 
 let checking = false;
 
-// The automatic zero-date batch, if one is running: Check now waits for it before restarting the pass.
+// The automatic refreshes, if running: Check now waits for them before restarting the pass.
 let autoRefresh = null;
 
 // Check now: refresh the unused tables, then a full zero-date pass from the first table, then reload.
@@ -304,16 +313,26 @@ const fillSchemaText = async () => {
   }
 };
 
-// One background zero-date batch when the stored pass is unfinished or stale. The server starts a new
-// pass when the last one is complete and stale. No reload: the next dashboard visit shows the result.
-const refreshZeroDates = async () => {
-  if (!OPTIONS.zeroDatesDue || checking) {
+// Background refreshes: the unused-table list when the stored one is stale (the page shows the stale list),
+// and one zero-date batch when the stored pass is unfinished or stale (the server starts a new pass when
+// the last one is complete and stale). No reload: the next dashboard visit shows the result.
+const refreshInBackground = async () => {
+  if (checking || (!OPTIONS.unusedDue && !OPTIONS.zeroDatesDue)) {
     return;
   }
 
-  autoRefresh = post('zerodates', { restart: '0' }).catch(() => {
-    // Check now reports errors; the automatic refresh stays silent.
-  });
+  // Check now reports errors; the automatic refresh stays silent.
+  const quiet = () => {};
+
+  autoRefresh = (async () => {
+    if (OPTIONS.unusedDue) {
+      await post('unused').catch(quiet);
+    }
+
+    if (OPTIONS.zeroDatesDue) {
+      await post('zerodates', { restart: '0' }).catch(quiet);
+    }
+  })();
 
   await autoRefresh;
   autoRefresh = null;
@@ -335,7 +354,7 @@ const start = () => {
   }
 
   fillSchemaText();
-  refreshZeroDates();
+  refreshInBackground();
 };
 
 // This module runs once the document is parsed (readyState "interactive"), but possibly before the dashboard's

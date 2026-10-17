@@ -14,12 +14,14 @@ use Joomla\CMS\Application\AdministratorApplication;
 use Joomla\CMS\Cache\CacheControllerFactoryInterface;
 use Joomla\CMS\Cache\Controller\OutputController;
 use Joomla\CMS\Date\Date;
+use Joomla\CMS\Document\Document;
 use Joomla\CMS\Event\Plugin\AjaxEvent;
 use Joomla\CMS\Factory;
 use Joomla\CMS\HTML\HTMLHelper;
 use Joomla\CMS\Language\Language;
 use Joomla\CMS\Session\Session;
 use Joomla\CMS\User\User;
+use Joomla\CMS\WebAsset\WebAssetManager;
 use Joomla\Database\DatabaseInterface;
 use Joomla\Input\Input;
 use Joomla\Module\Healthcheck\Administrator\Event\HealthChecksEvent;
@@ -55,6 +57,12 @@ class DatabaseTest extends UnitTestCase
      * @since  __DEPLOY_VERSION__
      */
     private ?string $method = null;
+
+    /**
+     * @var    integer  Queries the stub database was asked to build
+     * @since  __DEPLOY_VERSION__
+     */
+    private int $queries = 0;
 
     protected function setUp(): void
     {
@@ -227,7 +235,11 @@ class DatabaseTest extends UnitTestCase
         $db->method('getServerType')->willReturn($opts['server'] ?? 'mysql');
         $db->method('getPrefix')->willReturn('hc_');
         $db->method('getQuery')->willThrowException(new \RuntimeException('no database in unit tests'));
-        $db->method('createQuery')->willThrowException(new \RuntimeException('no database in unit tests'));
+        $db->method('createQuery')->willReturnCallback(function () {
+            $this->queries++;
+
+            throw new \RuntimeException('no database in unit tests');
+        });
 
         $cache = $this->createStub(OutputController::class);
         $cache->method('get')->willReturnCallback(static fn ($key) => $cached[$key] ?? false);
@@ -238,11 +250,17 @@ class DatabaseTest extends UnitTestCase
         $user = $this->createStub(User::class);
         $user->method('authorise')->willReturn($opts['admin'] ?? true);
 
-        $session = $this->createStub(SessionInterface::class);
+        $session = $opts['session'] ?? $this->createStub(SessionInterface::class);
         $session->method('get')->willReturn($user);
         $session->method('getToken')->willReturn('t');
 
         $app = $this->createStub(AdministratorApplication::class);
+        $app->method('getDocument')->willReturn($opts['document'] ?? null);
+
+        if (!empty($opts['bootFails'])) {
+            $app->method('bootComponent')->willThrowException(new \RuntimeException('com_installer is broken'));
+        }
+
         $app->method('getIdentity')->willReturn($user);
         $app->method('getSession')->willReturn($session);
         $app->method('get')->willReturn('secret');
@@ -453,16 +471,55 @@ class DatabaseTest extends UnitTestCase
      */
     private function ajaxCode(array $opts, bool $withToken = true): int
     {
-        $plugin = $this->plugin([], [], $opts);
+        $result = $this->ajaxResult($opts, $withToken);
+
+        return \is_int($result) ? $result : 0;
+    }
+
+    /**
+     * Dispatch onAjaxDatabase and return the task result, or the exception code.
+     *
+     * @param   array    $opts       Options for plugin(), plus cached (cache key => value)
+     * @param   boolean  $withToken  Whether the query carries the form token
+     *
+     * @return  array|integer
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    private function ajaxResult(array $opts, bool $withToken = true): array|int
+    {
+        $plugin = $this->plugin([], $opts['cached'] ?? [], $opts);
         $_GET   = $withToken ? [Session::getFormToken() => '1'] : ['bad' => '1'];
+        $event  = new AjaxEvent('onAjaxDatabase', ['subject' => Factory::$application]);
 
         try {
-            $plugin->onAjaxDatabase(new AjaxEvent('onAjaxDatabase', ['subject' => Factory::$application]));
+            $plugin->onAjaxDatabase($event);
         } catch (\RuntimeException $e) {
             return $e->getCode();
         }
 
-        return 0;
+        return $event->getArgument('result')[0];
+    }
+
+    /**
+     * A document that keeps script options, with a stub asset manager.
+     *
+     * @return  Document
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    private function document(): Document
+    {
+        return new class ($this->createStub(WebAssetManager::class)) extends Document {
+            public function __construct(private WebAssetManager $assets)
+            {
+            }
+
+            public function getWebAssetManager(): WebAssetManager
+            {
+                return $this->assets;
+            }
+        };
     }
 
     #[TestDox('The Ajax handler refuses a bad token, a non Super User and the site client, and an unknown task')]
@@ -591,5 +648,162 @@ class DatabaseTest extends UnitTestCase
         $this->assertStringContainsString('data-hc-db-key="kiufs_&quot;x"', $html);
         $this->assertSame('badge', $columns['count']['type']);
         $this->assertSame('warning', $columns['count']['badgeClass']);
+    }
+
+    #[TestDox('A zero-date table that could not be checked is named on the tile, which is never green')]
+    public function testZeroDatesError(): void
+    {
+        $state            = $this->zeroState([]);
+        $state['pass']    = '2026-10-17 10:00:00';
+        $state['tables']  = ['hc_a' => [], 'hc_b' => []];
+        $state['cursor']  = 1;
+        $state['error']   = ['table' => 'hc_<b>', 'at' => '2026-10-17 10:00:00'];
+        $state['updated'] = '2026-10-16 10:00:00';
+
+        $zero = $this->icons($this->plugin(['check_unused' => 0], ['zerodates' => $state]))['plg_healthcheck_database_zerodates'];
+
+        $this->assertSame('warning', $zero['status']);
+        $this->assertStringContainsString('PLG_HEALTHCHECK_DATABASE_ZERODATES_ERROR', $zero['text']);
+        $this->assertStringNotContainsString('PLG_HEALTHCHECK_DATABASE_ZERODATES_NONE', $zero['text']);
+
+        // Never checked before: still not left without a status.
+        $state['updated'] = null;
+        $zero             = $this->icons($this->plugin(['check_unused' => 0], ['zerodates' => $state]))['plg_healthcheck_database_zerodates'];
+
+        $this->assertSame('warning', $zero['status']);
+        $this->assertStringContainsString('PLG_HEALTHCHECK_DATABASE_ZERODATES_ERROR', $zero['text']);
+    }
+
+    #[TestDox('Tables too large to check in one request are counted on the tile')]
+    public function testZeroDatesSkipped(): void
+    {
+        $state             = $this->zeroState([]);
+        $state['pass']     = '2026-10-17 10:00:00';
+        $state['updated']  = '2026-10-17 10:05:00';
+        $state['complete'] = true;
+        $state['skipped']  = ['hc_big' => 'hc_big'];
+
+        $zero = $this->icons($this->plugin(['check_unused' => 0], ['zerodates' => $state]))['plg_healthcheck_database_zerodates'];
+
+        $this->assertStringContainsString('PLG_HEALTHCHECK_DATABASE_ZERODATES_SKIPPED', $zero['text']);
+        $this->assertStringNotContainsString('PLG_HEALTHCHECK_DATABASE_ZERODATES_NONE', $zero['text']);
+    }
+
+    #[TestDox('The zero-date progress result reports an error, which is never complete')]
+    public function testProgressResultError(): void
+    {
+        $state           = ZeroDateScanner::emptyState();
+        $state['tables'] = ['hc_a' => [], 'hc_b' => []];
+        $state['cursor'] = 1;
+
+        $this->assertSame(['complete' => false, 'error' => false, 'checked' => 1, 'total' => 2], Database::progressResult($state));
+
+        $state['error'] = ['table' => 'hc_b', 'at' => '2026-10-17 10:00:00'];
+
+        $this->assertSame(['complete' => false, 'error' => true, 'checked' => 1, 'total' => 2], Database::progressResult($state));
+    }
+
+    #[TestDox('Zero-date details carry the skipped tables and the table that could not be checked')]
+    public function testDetailsZeroDateNotes(): void
+    {
+        $state            = $this->zeroState(['hc_a' => ['created']]);
+        $state['skipped'] = ['hc_big' => 'HC_Big'];
+        $state['error']   = ['table' => 'hc_b', 'at' => '2026-10-17 10:00:00'];
+        $ignores          = new IgnoreList([]);
+        $data             = ['groups' => [], 'findings' => ZeroDateScanner::findings($state, $ignores), 'ignores' => $ignores, 'state' => $state];
+
+        $out = Database::detailsData('zerodates', $data, '', true);
+
+        $this->assertSame(['HC_Big'], $out['skipped']);
+        $this->assertSame('hc_b', $out['error']);
+
+        $html = Database::renderDetails(JPATH_ROOT . '/plugins/healthcheck/database/tmpl/details.php', $out);
+
+        $this->assertStringContainsString('PLG_HEALTHCHECK_DATABASE_DETAILS_SKIPPED', $html);
+        $this->assertStringContainsString('<code>HC_Big</code>', $html);
+        $this->assertStringContainsString('PLG_HEALTHCHECK_DATABASE_ZERODATES_ERROR', $html);
+        $this->assertStringContainsString('PLG_HEALTHCHECK_DATABASE_DETAILS_NEXT_ZERODATES', $html);
+    }
+
+    #[TestDox('The unused-table details end with the next step')]
+    public function testDetailsUnusedNextStep(): void
+    {
+        $groups = UnusedTables::groups($this->tables(['hc_orphan']), [], 'hc_', new IgnoreList([]));
+        $out    = Database::detailsData('unused', $this->detailsInput($groups), 'hc_', false);
+        $html   = Database::renderDetails(JPATH_ROOT . '/plugins/healthcheck/database/tmpl/details.php', $out);
+
+        $this->assertStringContainsString('PLG_HEALTHCHECK_DATABASE_DETAILS_NEXT_UNUSED', $html);
+        $this->assertStringNotContainsString('PLG_HEALTHCHECK_DATABASE_DETAILS_NEXT_ZERODATES', $html);
+    }
+
+    #[TestDox('The next-step sentences are plain advice without em-dashes')]
+    public function testNextStepStrings(): void
+    {
+        $strings = parse_ini_file(JPATH_ROOT . '/administrator/language/en-GB/plg_healthcheck_database.ini');
+
+        foreach (['PLG_HEALTHCHECK_DATABASE_DETAILS_NEXT_UNUSED', 'PLG_HEALTHCHECK_DATABASE_DETAILS_NEXT_ZERODATES'] as $key) {
+            $this->assertArrayHasKey($key, $strings);
+            $this->assertStringContainsString('Back up', $strings[$key]);
+            $this->assertStringNotContainsString("\u{2014}", $strings[$key]);
+        }
+
+        $this->assertStringStartsWith('Last checked: ', $strings['PLG_HEALTHCHECK_DATABASE_ZERODATES_CHECKED']);
+    }
+
+    #[TestDox('A failing schema check says unavailable with a warning, never a healthy 0')]
+    public function testSchemaFailure(): void
+    {
+        $_SERVER['REQUEST_METHOD'] = 'GET';
+
+        $result = $this->ajaxResult(['input' => ['task' => 'schema'], 'bootFails' => true]);
+
+        $this->assertSame(0, $result['amount']);
+        $this->assertSame('warning', $result['status']);
+        $this->assertSame('PLG_HEALTHCHECK_DATABASE_UNAVAILABLE', $result['label']);
+        $this->assertSame('PLG_HEALTHCHECK_DATABASE_UNAVAILABLE', $result['text']);
+    }
+
+    #[TestDox('The scanning tasks close the session before they scan')]
+    public function testScanTasksCloseSession(): void
+    {
+        $_SERVER['REQUEST_METHOD'] = 'POST';
+
+        foreach (['zerodates', 'unused'] as $task) {
+            $session = $this->createMock(SessionInterface::class);
+            $session->expects($this->once())->method('close');
+
+            // The stub database fails the scan; the session must be closed by then.
+            $this->assertSame(0, $this->ajaxCode(['input' => ['task' => $task], 'session' => $session]), $task);
+        }
+    }
+
+    #[TestDox('A stale unused-table cache is shown as is and refreshed in the background')]
+    public function testStaleUnusedRefreshesInBackground(): void
+    {
+        $unused   = ['updated' => '2000-01-01 00:00:00', 'tables' => $this->tables(['hc_orphan']), 'accounted' => []];
+        $document = $this->document();
+        $icons    = $this->icons($this->plugin(['check_zerodates' => 0], ['unused' => $unused], ['document' => $document]));
+
+        $this->assertSame(1, $icons['plg_healthcheck_database_unused']['amount']);
+        $this->assertSame(0, $this->queries, 'no synchronous rebuild');
+        $this->assertTrue($document->getScriptOptions('plg_healthcheck_database')['unusedDue']);
+
+        $fresh    = ['updated' => (new Date())->toSql()] + $unused;
+        $document = $this->document();
+        $this->icons($this->plugin(['check_zerodates' => 0], ['unused' => $fresh], ['document' => $document]));
+
+        $this->assertFalse($document->getScriptOptions('plg_healthcheck_database')['unusedDue']);
+    }
+
+    #[TestDox('Without zero dates, Check now says it re-runs the unused-table check only')]
+    public function testCheckNowTextWithoutZeroDates(): void
+    {
+        $unused = ['updated' => (new Date())->toSql(), 'tables' => $this->tables(['hc_orphan']), 'accounted' => []];
+
+        $pg = $this->icons($this->plugin([], ['unused' => $unused], ['server' => 'postgresql']));
+        $this->assertSame('PLG_HEALTHCHECK_DATABASE_CHECKNOW_TEXT_UNUSED', $pg['plg_healthcheck_database_checknow']['text']);
+
+        $my = $this->icons($this->plugin([], ['unused' => $unused]));
+        $this->assertSame('PLG_HEALTHCHECK_DATABASE_CHECKNOW_TEXT', $my['plg_healthcheck_database_checknow']['text']);
     }
 }

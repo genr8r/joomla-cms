@@ -56,6 +56,7 @@ final class Database extends CMSPlugin implements SubscriberInterface
         'JCLOSE',
         'PLG_HEALTHCHECK_DATABASE_ACTION_REFUSED',
         'PLG_HEALTHCHECK_DATABASE_CHECKNOW_DONE',
+        'PLG_HEALTHCHECK_DATABASE_CHECKNOW_ERROR',
         'PLG_HEALTHCHECK_DATABASE_CHECKNOW_FAILED',
         'PLG_HEALTHCHECK_DATABASE_CHECKNOW_PROGRESS',
         'PLG_HEALTHCHECK_DATABASE_CHECKNOW_STALLED',
@@ -156,12 +157,18 @@ final class Database extends CMSPlugin implements SubscriberInterface
         }
 
         if ($data['zeroDates'] || $data['unused']) {
+            $checkNowText = match (true) {
+                !$data['zeroDates'] => 'PLG_HEALTHCHECK_DATABASE_CHECKNOW_TEXT_UNUSED',
+                !$data['unused']    => 'PLG_HEALTHCHECK_DATABASE_CHECKNOW_TEXT_ZERODATES',
+                default             => 'PLG_HEALTHCHECK_DATABASE_CHECKNOW_TEXT',
+            };
+
             $icons[] = [
                 'id'      => 'plg_healthcheck_database_checknow',
                 'section' => $section,
                 'name'    => 'PLG_HEALTHCHECK_DATABASE_CHECKNOW_NAME',
                 'icon'    => 'icon-sync',
-                'text'    => self::escape(Text::_('PLG_HEALTHCHECK_DATABASE_CHECKNOW_TEXT')),
+                'text'    => self::escape(Text::_($checkNowText)),
                 'link'    => '#',
                 'onclick' => 'plgHealthcheckDatabaseCheckNow',
             ];
@@ -377,19 +384,24 @@ final class Database extends CMSPlugin implements SubscriberInterface
      * A new pass starts when asked to, or when the last pass is complete and stale. A complete pass that is
      * still fresh is returned as is, without scanning (ZeroDateScanner::run() would only touch its time).
      *
+     * The state is stored before each table is counted, with that table marked in progress, so a request
+     * that dies on a huge table leaves the marker behind and the next request skips that table.
+     *
      * @param   boolean  $restart  Start a new pass from the first table
      *
-     * @return  array{complete:bool, checked:int, total:int}
+     * @return  array{complete:bool, error:bool, checked:int, total:int}
      *
      * @since   __DEPLOY_VERSION__
      */
     private function zeroDatesTask(bool $restart): array
     {
+        $this->closeSession();
+
         $db      = $this->getDatabase();
         $catalog = CatalogFactory::for($db);
 
         if (!$this->params->get('check_zerodates', 1) || !$catalog->supportsZeroDates()) {
-            return ['complete' => true, 'checked' => 0, 'total' => 0];
+            return ['complete' => true, 'error' => false, 'checked' => 0, 'total' => 0];
         }
 
         $now     = (new Date())->toSql();
@@ -412,7 +424,7 @@ final class Database extends CMSPlugin implements SubscriberInterface
         }
 
         $budget = (float) max(0, min(20, (int) $this->params->get('time_budget', 5)));
-        $state  = $scanner->run($state, $prefix, $budget, $now);
+        $state  = $scanner->run($state, $prefix, $budget, $now, fn (array $state) => $this->store->put('zerodates', $state));
 
         $this->store->put('zerodates', $state);
 
@@ -420,15 +432,33 @@ final class Database extends CMSPlugin implements SubscriberInterface
     }
 
     /**
+     * What a zero-date batch reports to the admin script. `error` means a table could not be checked: the
+     * pass is not complete and Check now stops instead of retrying.
+     *
      * @param   array  $state  Zero-date scanner state
      *
-     * @return  array{complete:bool, checked:int, total:int}
+     * @return  array{complete:bool, error:bool, checked:int, total:int}
      *
      * @since   __DEPLOY_VERSION__
      */
-    private static function progressResult(array $state): array
+    public static function progressResult(array $state): array
     {
-        return ['complete' => !empty($state['complete'])] + ZeroDateScanner::progress($state);
+        $error = !empty($state['error']);
+
+        return ['complete' => !$error && !empty($state['complete']), 'error' => $error] + ZeroDateScanner::progress($state);
+    }
+
+    /**
+     * Write and close the session, so a long scan does not hold the session lock and block the same
+     * user's other admin requests. The guard has already checked the token; nothing later needs the session.
+     *
+     * @return  void
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    private function closeSession(): void
+    {
+        $this->getApplication()->getSession()->close();
     }
 
     /**
@@ -440,6 +470,8 @@ final class Database extends CMSPlugin implements SubscriberInterface
      */
     private function unusedTask(): array
     {
+        $this->closeSession();
+
         if (!$this->params->get('check_unused', 1)) {
             return ['ok' => false];
         }
@@ -484,10 +516,11 @@ final class Database extends CMSPlugin implements SubscriberInterface
      * What the Details popup shows: the matching unused-table groups or zero-date findings, open rows first.
      *
      * Each table and column gets a state: `open`, `ignored` (an entry of its own) or `prefix` (ignored only
-     * through an Ignore all of its group).
+     * through an Ignore all of its group). Zero dates also list the tables skipped as too large and the table
+     * the last run could not check.
      *
      * @param   string   $kind  `unused` or `zerodates`
-     * @param   array    $data  Data for this request (groups, findings, ignores)
+     * @param   array    $data  Data for this request (groups, findings, ignores, state)
      * @param   string   $key   Prefix of the group, or table name, compared case-insensitively
      * @param   boolean  $all   Everything of that kind; the key is then ignored
      *
@@ -512,7 +545,22 @@ final class Database extends CMSPlugin implements SubscriberInterface
 
             usort($findings, $openFirst);
 
-            return ['kind' => $kind, 'findings' => $findings];
+            $state   = $data['state'] ?? [];
+            $skipped = [];
+
+            foreach ($state['skipped'] ?? [] as $skippedKey => $name) {
+                if ($all || strtolower((string) $skippedKey) === $key) {
+                    $skipped[] = (string) $name;
+                }
+            }
+
+            $error = $state['error']['table'] ?? null;
+
+            if ($error !== null && !$all && strtolower($error) !== $key) {
+                $error = null;
+            }
+
+            return ['kind' => $kind, 'findings' => $findings, 'skipped' => $skipped, 'error' => $error];
         }
 
         $groups = [];
@@ -614,15 +662,25 @@ final class Database extends CMSPlugin implements SubscriberInterface
      * Extensions with database update problems, from core's own check in Extensions > Database.
      *
      * @return  array{amount:int, status:string, problems:int, extensions:int, text:string, label:string}
+     *          A warning with the unavailable text when core's check fails
      *
      * @since   __DEPLOY_VERSION__
      */
     private function schemaResult(): array
     {
-        $model = $this->getApplication()->bootComponent('com_installer')->getMVCFactory()
-            ->createModel('Database', 'Administrator', ['ignore_request' => true]);
+        try {
+            $model = $this->getApplication()->bootComponent('com_installer')->getMVCFactory()
+                ->createModel('Database', 'Administrator', ['ignore_request' => true]);
 
-        return self::schemaSummary($model->getItems() ?: []);
+            return self::schemaSummary($model->getItems() ?: []);
+        } catch (\Throwable $e) {
+            Log::add('Database Health Check: the schema check failed: ' . $e->getMessage(), Log::WARNING, 'healthcheck');
+
+            $text = Text::_('PLG_HEALTHCHECK_DATABASE_UNAVAILABLE');
+
+            // A warning, not 0 and healthy: core's async script shows the amount and status as given.
+            return ['amount' => 0, 'status' => 'warning', 'problems' => 0, 'extensions' => 0, 'text' => self::escape($text), 'label' => $text];
+        }
     }
 
     /**
@@ -711,7 +769,8 @@ final class Database extends CMSPlugin implements SubscriberInterface
     }
 
     /**
-     * Results for this request, loaded once. Never runs the zero-date scan.
+     * Results for this request, loaded once. Never runs the zero-date scan, and rebuilds the unused-table
+     * list only when none is stored.
      *
      * @return  array
      *
@@ -732,6 +791,7 @@ final class Database extends CMSPlugin implements SubscriberInterface
             'zeroDates'  => false,
             'unused'     => false,
             'unusedFail' => false,
+            'unusedDue'  => false,
             'groups'     => [],
             'state'      => ZeroDateScanner::emptyState(),
             'findings'   => [],
@@ -760,12 +820,16 @@ final class Database extends CMSPlugin implements SubscriberInterface
             $data['unused'] = true;
             $stored         = $this->store->get('unused');
 
-            if ($stored === null || ResultStore::isStale($stored['updated'] ?? null, $hours, $now)) {
+            // Only a missing list is built now. A stale one is shown as is and the admin script refreshes it
+            // in the background (task=unused); the next page load shows the new list.
+            if ($stored === null) {
                 try {
                     $stored = $this->refreshUnused($catalog, $now);
                 } catch (\Throwable $e) {
                     Log::add('Database Health Check: could not list the tables: ' . $e->getMessage(), Log::WARNING, 'healthcheck');
                 }
+            } elseif (ResultStore::isStale($stored['updated'] ?? null, $hours, $now)) {
+                $data['unusedDue'] = true;
             }
 
             if ($stored === null) {
@@ -809,6 +873,8 @@ final class Database extends CMSPlugin implements SubscriberInterface
         $tables   = \count(array_unique(array_map(static fn (array $finding): string => strtolower($finding['table']), $open)));
         $updated  = $state['updated'] ?? null;
         $never    = $updated === null && empty($state['results']);
+        $error    = $state['error']['table'] ?? null;
+        $skipped  = \count($state['skipped'] ?? []);
         $lines    = [];
 
         if ($open) {
@@ -816,10 +882,18 @@ final class Database extends CMSPlugin implements SubscriberInterface
                 Text::plural('PLG_HEALTHCHECK_DATABASE_N_COLUMNS', \count($open)),
                 Text::plural('PLG_HEALTHCHECK_DATABASE_N_TABLES', $tables)
             );
-        } elseif (!$never) {
+        } elseif (!$never && $error === null && $skipped === 0) {
             $lines[] = Text::_('PLG_HEALTHCHECK_DATABASE_ZERODATES_NONE');
         } elseif (($state['pass'] ?? null) === null) {
             $lines[] = Text::_('PLG_HEALTHCHECK_DATABASE_ZERODATES_NEVER');
+        }
+
+        if ($error !== null) {
+            $lines[] = Text::sprintf('PLG_HEALTHCHECK_DATABASE_ZERODATES_ERROR', $error);
+        }
+
+        if ($skipped > 0) {
+            $lines[] = Text::plural('PLG_HEALTHCHECK_DATABASE_ZERODATES_SKIPPED', $skipped);
         }
 
         // One status line: the progress while a pass is unfinished, otherwise when the last pass finished.
@@ -844,9 +918,11 @@ final class Database extends CMSPlugin implements SubscriberInterface
             'onclick' => 'plgHealthcheckDatabaseZeroDates',
         ];
 
-        if (!$never) {
+        // Never checked: no amount or status, a 0 would read as healthy. A table that could not be checked
+        // is never healthy.
+        if (!$never || $error !== null) {
             $icon['amount'] = \count($open);
-            $icon['status'] = $open ? 'warning' : 'success';
+            $icon['status'] = ($open || $error !== null) ? 'warning' : 'success';
         }
 
         return $icon;
@@ -933,6 +1009,7 @@ final class Database extends CMSPlugin implements SubscriberInterface
         $document->addScriptOptions('plg_healthcheck_database', [
             'ajax'         => 'index.php?option=com_ajax&group=healthcheck&plugin=database&format=json',
             'token'        => Session::getFormToken(),
+            'unusedDue'    => $data['unused'] && $data['unusedDue'],
             'zeroDatesDue' => $data['zeroDates'] && $data['due'],
         ]);
 

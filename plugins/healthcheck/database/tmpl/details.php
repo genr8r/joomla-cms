@@ -18,6 +18,9 @@ use Joomla\Plugin\Healthcheck\Database\Ignore\IgnoreRepository;
  * Details of unused tables or zero-date columns, with Ignore / Reopen. Names, counts, sizes and dates only.
  * Table and column names come from the database: escape all of them.
  *
+ * Zero dates also name the table the last run could not check and the tables too large to check in one request.
+ * The popup ends with the next step for the maintainer; the plugin itself never changes anything.
+ *
  * Every row and group header carries its state (open, ignored, or prefix: ignored through Ignore all), and each
  * badge or button lists the states it is shown in, so the admin script can switch them in place.
  *
@@ -26,6 +29,10 @@ use Joomla\Plugin\Healthcheck\Database\Ignore\IgnoreRepository;
 $kind     = $displayData['kind'] ?? '';
 $groups   = $displayData['groups'] ?? [];
 $findings = $displayData['findings'] ?? [];
+$skipped  = $displayData['skipped'] ?? [];
+$error    = $displayData['error'] ?? null;
+$notes    = $kind === 'zerodates' && ($skipped || $error !== null);
+$rows     = ($kind === 'unused' && $groups) || ($kind === 'zerodates' && $findings);
 
 $e      = static fn ($value): string => htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8');
 $hidden = static fn (array $states, string $state): string => \in_array($state, $states, true) ? '' : ' hidden';
@@ -59,8 +66,17 @@ $actions = static function (string $state, string $kind, string $name, string $i
 ?>
 <div class="p-2 plg-hc-db-details-body">
     <p class="text-body-secondary"><?php echo $e(Text::_('PLG_HEALTHCHECK_DATABASE_DETAILS_READONLY')); ?></p>
-<?php if (($kind === 'unused' && !$groups) || ($kind === 'zerodates' && !$findings)) : ?>
+<?php if ($kind === 'zerodates' && $error !== null) : ?>
+    <div class="alert alert-warning" role="alert"><?php echo $e(Text::sprintf('PLG_HEALTHCHECK_DATABASE_ZERODATES_ERROR', $error)); ?></div>
+<?php endif; ?>
+<?php if ($kind === 'zerodates' && $skipped) : ?>
+    <p><?php echo $e(Text::_('PLG_HEALTHCHECK_DATABASE_DETAILS_SKIPPED')); ?>
+        <?php echo implode(', ', array_map(static fn ($name): string => '<code>' . $e($name) . '</code>', $skipped)); ?></p>
+<?php endif; ?>
+<?php if (!$rows) : ?>
+    <?php if (!$notes) : ?>
     <p class="mb-0"><?php echo $e(Text::_('PLG_HEALTHCHECK_DATABASE_DETAILS_NONE')); ?></p>
+    <?php endif; ?>
 <?php elseif ($kind === 'unused') : ?>
     <?php foreach ($groups as $group) : ?>
         <?php
@@ -129,5 +145,8 @@ $actions = static function (string $state, string $kind, string $name, string $i
             </tbody>
         </table>
     </div>
+<?php endif; ?>
+<?php if ($rows) : ?>
+    <p class="mb-0"><?php echo $e(Text::_($kind === 'zerodates' ? 'PLG_HEALTHCHECK_DATABASE_DETAILS_NEXT_ZERODATES' : 'PLG_HEALTHCHECK_DATABASE_DETAILS_NEXT_UNUSED')); ?></p>
 <?php endif; ?>
 </div>

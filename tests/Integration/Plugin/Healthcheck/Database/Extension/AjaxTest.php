@@ -321,9 +321,9 @@ class AjaxTest extends IntegrationTestCase implements DBTestInterface
         $budget = ['params' => ['time_budget' => 0]];
         $post   = fn (string $restart) => $this->ajax('POST', ['task' => 'zerodates'], ['restart' => $restart], $budget);
 
-        $this->assertSame(['complete' => false, 'checked' => 1, 'total' => 3], $post('0'));
-        $this->assertSame(['complete' => false, 'checked' => 2, 'total' => 3], $post('0'));
-        $this->assertSame(['complete' => true, 'checked' => 3, 'total' => 3], $post('0'));
+        $this->assertSame(['complete' => false, 'error' => false, 'checked' => 1, 'total' => 3], $post('0'));
+        $this->assertSame(['complete' => false, 'error' => false, 'checked' => 2, 'total' => 3], $post('0'));
+        $this->assertSame(['complete' => true, 'error' => false, 'checked' => 3, 'total' => 3], $post('0'));
 
         $findings = ZeroDateScanner::findings($this->store()->get('zerodates'), new IgnoreList([]));
         $prefix   = $this->db->getPrefix();
@@ -331,8 +331,8 @@ class AjaxTest extends IntegrationTestCase implements DBTestInterface
         $this->assertSame([1, 1], array_column($findings, 'zero'));
 
         // A fresh complete pass is not scanned again; restart=1 begins a new one.
-        $this->assertSame(['complete' => true, 'checked' => 3, 'total' => 3], $post('0'));
-        $this->assertSame(['complete' => false, 'checked' => 1, 'total' => 3], $post('1'));
+        $this->assertSame(['complete' => true, 'error' => false, 'checked' => 3, 'total' => 3], $post('0'));
+        $this->assertSame(['complete' => false, 'error' => false, 'checked' => 1, 'total' => 3], $post('1'));
 
         // A stale complete pass starts over without restart.
         $state             = $this->store()->get('zerodates');
@@ -340,7 +340,7 @@ class AjaxTest extends IntegrationTestCase implements DBTestInterface
         $state['complete'] = true;
         $state['updated']  = '2000-01-01 00:00:00';
         $this->store()->put('zerodates', $state);
-        $this->assertSame(['complete' => false, 'checked' => 1, 'total' => 3], $post('0'));
+        $this->assertSame(['complete' => false, 'error' => false, 'checked' => 1, 'total' => 3], $post('0'));
 
         $html = $this->ajax('GET', ['task' => 'details', 'kind' => 'zerodates', 'key' => strtoupper($prefix) . 'ZD_B'])['html'];
         $this->assertStringContainsString($prefix . 'zd_b', $html);
@@ -353,11 +353,41 @@ class AjaxTest extends IntegrationTestCase implements DBTestInterface
         $this->assertStringContainsString($prefix . 'zd_b', $all);
     }
 
+    public function testZeroDatesSkipsTableARequestDiedOn(): void
+    {
+        if (!$this->isMysql()) {
+            $this->markTestSkipped('Zero dates exist on MySQL/MariaDB only.');
+        }
+
+        foreach (['#__zd_a', '#__zd_b'] as $table) {
+            $this->exec('CREATE TABLE ' . $this->db->quoteName($table) . ' (created DATETIME NULL)');
+        }
+
+        $budget = ['params' => ['time_budget' => 0]];
+        $post   = fn () => $this->ajax('POST', ['task' => 'zerodates'], ['restart' => '0'], $budget);
+
+        // Date tables with the plugin's prefix: the ignore table, zd_a and zd_b.
+        $this->assertSame(['complete' => false, 'error' => false, 'checked' => 1, 'total' => 3], $post());
+
+        // The request for the second table died while counting it: its marker is still stored.
+        $state = $this->store()->get('zerodates');
+        $key   = array_keys($state['tables'])[1];
+        $this->assertNull($state['inprogress']);
+        $state['inprogress'] = $key;
+        $this->store()->put('zerodates', $state);
+
+        $this->assertSame(['complete' => true, 'error' => false, 'checked' => 3, 'total' => 3], $post());
+
+        $state = $this->store()->get('zerodates');
+        $this->assertSame([$key => $this->db->getPrefix() . 'zd_a'], $state['skipped']);
+        $this->assertNull($state['inprogress']);
+    }
+
     public function testZeroDatesOffIsComplete(): void
     {
         $result = $this->ajax('POST', ['task' => 'zerodates'], [], ['params' => ['check_zerodates' => 0]]);
 
-        $this->assertSame(['complete' => true, 'checked' => 0, 'total' => 0], $result);
+        $this->assertSame(['complete' => true, 'error' => false, 'checked' => 0, 'total' => 0], $result);
         $this->assertNull($this->store()->get('zerodates'));
     }
 
