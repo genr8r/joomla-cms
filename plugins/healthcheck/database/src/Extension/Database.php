@@ -364,7 +364,7 @@ final class Database extends CMSPlugin implements SubscriberInterface
     /**
      * Extensions with database update problems, from core's own check in Extensions > Database.
      *
-     * @return  array{amount:int, status:string}
+     * @return  array{amount:int, status:string, problems:int, extensions:int, text:string}
      *
      * @since   __DEPLOY_VERSION__
      */
@@ -373,12 +373,61 @@ final class Database extends CMSPlugin implements SubscriberInterface
         $model = $this->getApplication()->bootComponent('com_installer')->getMVCFactory()
             ->createModel('Database', 'Administrator', ['ignore_request' => true]);
 
-        $count = \count(array_filter(
-            $model->getItems() ?: [],
-            static fn ($item): bool => (int) ($item['errorsCount'] ?? 0) > 0
-        ));
+        return self::schemaSummary($model->getItems() ?: []);
+    }
 
-        return ['amount' => $count, 'status' => $count > 0 ? 'warning' : 'success'];
+    /**
+     * Map the items of com_installer's DatabaseModel::getItems() to the schema icon values.
+     *
+     * @param   array  $items  Items with an errorsCount key
+     *
+     * @return  array{amount:int, status:string, problems:int, extensions:int, text:string}
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    public static function schemaSummary(array $items): array
+    {
+        $amount   = 0;
+        $problems = 0;
+
+        foreach ($items as $item) {
+            $errors = (int) ($item['errorsCount'] ?? 0);
+
+            if ($errors > 0) {
+                $amount++;
+                $problems += $errors;
+            }
+        }
+
+        $text = $problems > 0
+            ? self::inPhrase(
+                Text::plural('PLG_HEALTHCHECK_DATABASE_N_PROBLEMS', $problems),
+                Text::plural('PLG_HEALTHCHECK_DATABASE_N_EXTENSIONS', $amount)
+            )
+            : Text::plural('PLG_HEALTHCHECK_DATABASE_SCHEMA_MATCH', \count($items));
+
+        return [
+            'amount'     => $amount,
+            'status'     => $amount > 0 ? 'warning' : 'success',
+            'problems'   => $problems,
+            'extensions' => \count($items),
+            'text'       => self::escape($text),
+        ];
+    }
+
+    /**
+     * "<count> in <count>" from two plural fragments.
+     *
+     * @param   string  $what   The counted things, e.g. "3 tables"
+     * @param   string  $where  Where they are, e.g. "2 groups"
+     *
+     * @return  string  Plain text
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    private static function inPhrase(string $what, string $where): string
+    {
+        return Text::sprintf('PLG_HEALTHCHECK_DATABASE_N_IN_M', $what, $where);
     }
 
     /**
@@ -450,6 +499,9 @@ final class Database extends CMSPlugin implements SubscriberInterface
         } catch (\Throwable $e) {
             Log::add('Database Health Check: ' . $e->getMessage(), Log::WARNING, 'healthcheck');
 
+            $data['unused']     = (bool) $this->params->get('check_unused', 1);
+            $data['unusedFail'] = $data['unused'];
+
             return $this->data = $data;
         }
 
@@ -509,7 +561,10 @@ final class Database extends CMSPlugin implements SubscriberInterface
         $lines    = [];
 
         if ($open) {
-            $lines[] = Text::sprintf('PLG_HEALTHCHECK_DATABASE_ZERODATES_SUMMARY', \count($open), $tables);
+            $lines[] = self::inPhrase(
+                Text::plural('PLG_HEALTHCHECK_DATABASE_N_COLUMNS', \count($open)),
+                Text::plural('PLG_HEALTHCHECK_DATABASE_N_TABLES', $tables)
+            );
         } elseif (!$never) {
             $lines[] = Text::_('PLG_HEALTHCHECK_DATABASE_ZERODATES_NONE');
         } elseif (($state['pass'] ?? null) === null) {
@@ -583,7 +638,7 @@ final class Database extends CMSPlugin implements SubscriberInterface
         ));
 
         $lines = [$open > 0
-            ? Text::sprintf('PLG_HEALTHCHECK_DATABASE_UNUSED_SUMMARY', $open, $withOpen)
+            ? self::inPhrase(Text::plural('PLG_HEALTHCHECK_DATABASE_N_TABLES', $open), Text::plural('PLG_HEALTHCHECK_DATABASE_N_GROUPS', $withOpen))
             : Text::_('PLG_HEALTHCHECK_DATABASE_UNUSED_NONE')];
 
         if ($ignored > 0) {

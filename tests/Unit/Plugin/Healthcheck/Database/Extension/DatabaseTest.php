@@ -14,11 +14,14 @@ use Joomla\CMS\Application\AdministratorApplication;
 use Joomla\CMS\Cache\CacheControllerFactoryInterface;
 use Joomla\CMS\Cache\Controller\OutputController;
 use Joomla\CMS\Date\Date;
+use Joomla\CMS\Event\Plugin\AjaxEvent;
 use Joomla\CMS\Factory;
 use Joomla\CMS\HTML\HTMLHelper;
 use Joomla\CMS\Language\Language;
+use Joomla\CMS\Session\Session;
 use Joomla\CMS\User\User;
 use Joomla\Database\DatabaseInterface;
+use Joomla\Input\Input;
 use Joomla\Module\Healthcheck\Administrator\Event\HealthChecksEvent;
 use Joomla\Plugin\Healthcheck\Database\Extension\Database;
 use Joomla\Plugin\Healthcheck\Database\Ignore\IgnoreList;
@@ -41,9 +44,17 @@ class DatabaseTest extends UnitTestCase
 {
     private const EVIL = '<img src=x onerror=1>';
 
+    /**
+     * @var    array  $_GET before the test
+     * @since  __DEPLOY_VERSION__
+     */
+    private array $get = [];
+
     protected function setUp(): void
     {
         parent::setUp();
+
+        $this->get = $_GET;
 
         $language = $this->createStub(Language::class);
         $language->method('_')->willReturnArgument(0);
@@ -59,6 +70,7 @@ class DatabaseTest extends UnitTestCase
         HTMLHelper::unregister('date');
         Factory::$language    = null;
         Factory::$application = null;
+        $_GET                 = $this->get;
 
         parent::tearDown();
     }
@@ -188,15 +200,16 @@ class DatabaseTest extends UnitTestCase
      *
      * @param   array  $params  Plugin params
      * @param   array  $cached  Cache key => stored value
+     * @param   array  $opts    server (type), admin (core.admin), client, input (data)
      *
      * @return  Database
      *
      * @since   __DEPLOY_VERSION__
      */
-    private function plugin(array $params, array $cached): Database
+    private function plugin(array $params, array $cached, array $opts = []): Database
     {
         $db = $this->createStub(DatabaseInterface::class);
-        $db->method('getServerType')->willReturn('mysql');
+        $db->method('getServerType')->willReturn($opts['server'] ?? 'mysql');
         $db->method('getPrefix')->willReturn('hc_');
         $db->method('getQuery')->willThrowException(new \RuntimeException('no database in unit tests'));
         $db->method('createQuery')->willThrowException(new \RuntimeException('no database in unit tests'));
@@ -208,7 +221,7 @@ class DatabaseTest extends UnitTestCase
         $factory->method('createCacheController')->willReturn($cache);
 
         $user = $this->createStub(User::class);
-        $user->method('authorise')->willReturn(true);
+        $user->method('authorise')->willReturn($opts['admin'] ?? true);
 
         $session = $this->createStub(SessionInterface::class);
         $session->method('get')->willReturn($user);
@@ -218,6 +231,8 @@ class DatabaseTest extends UnitTestCase
         $app->method('getIdentity')->willReturn($user);
         $app->method('getSession')->willReturn($session);
         $app->method('get')->willReturn('secret');
+        $app->method('isClient')->willReturnCallback(static fn ($client) => $client === ($opts['client'] ?? 'administrator'));
+        $app->method('getInput')->willReturn(new Input($opts['input'] ?? []));
         Factory::$application = $app;
 
         $plugin = new Database(
@@ -270,6 +285,7 @@ class DatabaseTest extends UnitTestCase
 
         $zero = $icons['plg_healthcheck_database_zerodates'];
         $this->assertSame('PLG_HEALTHCHECK_DATABASE_ZERODATES_NEVER', $zero['text']);
+        $this->assertArrayNotHasKey('amount', $zero);
         $this->assertArrayNotHasKey('status', $zero);
 
         $this->assertSame(3, $icons['plg_healthcheck_database_unused']['amount']);
@@ -295,7 +311,7 @@ class DatabaseTest extends UnitTestCase
         $this->assertSame(2, $zero['amount']);
         $this->assertSame('warning', $zero['status']);
         $this->assertSame(
-            'PLG_HEALTHCHECK_DATABASE_ZERODATES_SUMMARY<br>PLG_HEALTHCHECK_DATABASE_ZERODATES_CHECKED<br>PLG_HEALTHCHECK_DATABASE_ZERODATES_PARTIAL',
+            'PLG_HEALTHCHECK_DATABASE_N_IN_M<br>PLG_HEALTHCHECK_DATABASE_ZERODATES_CHECKED<br>PLG_HEALTHCHECK_DATABASE_ZERODATES_PARTIAL',
             $zero['text']
         );
     }
@@ -306,6 +322,117 @@ class DatabaseTest extends UnitTestCase
         $icons = $this->icons($this->plugin(['check_unused' => 0, 'check_zerodates' => 0], []));
 
         $this->assertSame(['plg_healthcheck_database_schema'], array_keys($icons));
+    }
+
+    /**
+     * Use the plugin's real en-GB strings with English plural suffixes.
+     *
+     * @return  void
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    private function english(): void
+    {
+        $strings  = parse_ini_file(JPATH_ROOT . '/administrator/language/en-GB/plg_healthcheck_database.ini');
+        $language = $this->createStub(Language::class);
+        $language->method('_')->willReturnCallback(static fn ($key) => $strings[$key] ?? $key);
+        $language->method('hasKey')->willReturnCallback(static fn ($key) => isset($strings[$key]));
+        $language->method('getPluralSuffixes')->willReturnCallback(static fn ($n) => match ((int) $n) {
+            0       => ['0'],
+            1       => ['ONE', '1'],
+            default => ['OTHER', 'MORE'],
+        });
+        Factory::$language = $language;
+    }
+
+    #[TestDox('The schema result counts extensions with problems, the problems and the extensions checked')]
+    public function testSchemaSummary(): void
+    {
+        $this->english();
+
+        $this->assertSame(
+            ['amount' => 2, 'status' => 'warning', 'problems' => 3, 'extensions' => 3, 'text' => '3 problems in 2 extensions'],
+            Database::schemaSummary([['errorsCount' => 2], ['errorsCount' => 0], ['errorsCount' => 1]])
+        );
+        $this->assertSame('1 problem in 1 extension', Database::schemaSummary([['errorsCount' => 1]])['text']);
+        $this->assertSame(
+            ['amount' => 0, 'status' => 'success', 'problems' => 0, 'extensions' => 4, 'text' => 'All 4 extensions match their schema'],
+            Database::schemaSummary(array_fill(0, 4, ['errorsCount' => 0]))
+        );
+        $this->assertSame('1 extension matches its schema', Database::schemaSummary([['errorsCount' => 0]])['text']);
+    }
+
+    #[TestDox('Icon summaries use singular and plural forms')]
+    public function testPlurals(): void
+    {
+        $this->english();
+
+        $now    = (new Date())->toSql();
+        $unused = ['updated' => $now, 'tables' => $this->tables(['hc_orphan']), 'accounted' => []];
+        $state  = $this->zeroState(['hc_a' => ['created']]);
+
+        $state['updated']  = $now;
+        $state['complete'] = true;
+
+        $icons = $this->icons($this->plugin([], ['unused' => $unused, 'zerodates' => $state]));
+
+        $this->assertSame('1 table in 1 group', $icons['plg_healthcheck_database_unused']['text']);
+        $this->assertStringStartsWith('1 column in 1 table<br>', $icons['plg_healthcheck_database_zerodates']['text']);
+    }
+
+    #[TestDox('The unused icon says unavailable when the refresh fails and nothing is cached')]
+    public function testUnusedUnavailable(): void
+    {
+        $unused = $this->icons($this->plugin(['check_zerodates' => 0], []))['plg_healthcheck_database_unused'];
+
+        $this->assertSame('PLG_HEALTHCHECK_DATABASE_UNAVAILABLE', $unused['text']);
+        $this->assertArrayNotHasKey('amount', $unused);
+        $this->assertArrayNotHasKey('status', $unused);
+    }
+
+    #[TestDox('The unused icon says unavailable on an unsupported database driver')]
+    public function testUnsupportedDriver(): void
+    {
+        $icons = $this->icons($this->plugin([], [], ['server' => 'sqlsrv']));
+
+        $this->assertArrayNotHasKey('plg_healthcheck_database_zerodates', $icons);
+        $this->assertSame('PLG_HEALTHCHECK_DATABASE_UNAVAILABLE', $icons['plg_healthcheck_database_unused']['text']);
+        $this->assertArrayNotHasKey('status', $icons['plg_healthcheck_database_unused']);
+    }
+
+    /**
+     * Dispatch onAjaxDatabase and return the exception code, or 0 when none was thrown.
+     *
+     * @param   array    $opts       Options for plugin()
+     * @param   boolean  $withToken  Whether the query carries the form token
+     *
+     * @return  integer
+     *
+     * @since   __DEPLOY_VERSION__
+     */
+    private function ajaxCode(array $opts, bool $withToken = true): int
+    {
+        $plugin = $this->plugin([], [], $opts);
+        $_GET   = $withToken ? [Session::getFormToken() => '1'] : ['bad' => '1'];
+
+        try {
+            $plugin->onAjaxDatabase(new AjaxEvent('onAjaxDatabase', ['subject' => Factory::$application]));
+        } catch (\RuntimeException $e) {
+            return $e->getCode();
+        }
+
+        return 0;
+    }
+
+    #[TestDox('The Ajax handler refuses a bad token, a non Super User and the site client, and an unknown task')]
+    public function testAjaxGuard(): void
+    {
+        $task = ['input' => ['task' => 'nope']];
+
+        $this->assertSame(403, $this->ajaxCode($task, false));
+        $this->assertSame(403, $this->ajaxCode($task + ['admin' => false]));
+        $this->assertSame(403, $this->ajaxCode($task + ['client' => 'site']));
+        $this->assertSame(400, $this->ajaxCode($task));
     }
 
     #[TestDox('The Details button carries the finding kind and key')]
