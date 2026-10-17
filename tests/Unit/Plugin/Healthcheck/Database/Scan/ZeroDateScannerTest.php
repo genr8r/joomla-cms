@@ -92,6 +92,8 @@ class ZeroDateScannerTest extends UnitTestCase
     }
 
     /**
+     * A scanner whose clock moves 2 seconds per reading.
+     *
      * @param   Catalog  $catalog  The catalog
      *
      * @return  ZeroDateScanner
@@ -110,6 +112,8 @@ class ZeroDateScannerTest extends UnitTestCase
     }
 
     /**
+     * Zero counts of the fake catalog.
+     *
      * @return  array
      *
      * @since   __DEPLOY_VERSION__
@@ -119,6 +123,15 @@ class ZeroDateScannerTest extends UnitTestCase
         return ['hc_a.created' => 2, 'hc_b.modified' => 0, 'hc_c.day' => 1];
     }
 
+    /**
+     * The findings as "table.column=zero" strings.
+     *
+     * @param   array  $state  The state
+     *
+     * @return  string[]
+     *
+     * @since   __DEPLOY_VERSION__
+     */
     private function open(array $state): array
     {
         return array_map(

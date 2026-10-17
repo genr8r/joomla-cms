@@ -28,6 +28,8 @@ class UnusedTablesTest extends UnitTestCase
     private const SET = ['hc_content', 'hc_foo_items', 'hc_orphan', 'kiufs_content', 'kiufs_users', 'legacy'];
 
     /**
+     * Catalog rows for the names.
+     *
      * @param   string[]  $names  Table names
      *
      * @return  array
@@ -43,6 +45,8 @@ class UnusedTablesTest extends UnitTestCase
     }
 
     /**
+     * Table names per group prefix.
+     *
      * @param   array  $groups  Groups
      *
      * @return  array

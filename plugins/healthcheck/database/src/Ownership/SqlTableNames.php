@@ -26,6 +26,9 @@ final class SqlTableNames
     /**
      * A table name token, optionally wrapped in backticks, double quotes or brackets.
      * The capture group holds the bare name.
+     *
+     * @var    string
+     * @since  __DEPLOY_VERSION__
      */
     private const NAME = '[`"\[]?(#__[A-Za-z0-9_$]+)[`"\]]?';
 

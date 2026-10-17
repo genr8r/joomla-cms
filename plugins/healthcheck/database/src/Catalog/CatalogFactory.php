@@ -24,6 +24,8 @@ use Joomla\Database\DatabaseInterface;
 final class CatalogFactory
 {
     /**
+     * The catalog for the server type of the database.
+     *
      * @param   DatabaseInterface  $db  The database.
      *
      * @return  Catalog

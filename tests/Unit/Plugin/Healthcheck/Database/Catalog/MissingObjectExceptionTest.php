@@ -65,6 +65,8 @@ class MissingObjectExceptionTest extends UnitTestCase
     }
 
     /**
+     * A missing-object failure is recognised and wrapped as one.
+     *
      * @param   \Throwable  $e  The failure
      *
      * @return  void
@@ -83,6 +85,8 @@ class MissingObjectExceptionTest extends UnitTestCase
     }
 
     /**
+     * Any other failure is wrapped as a plain RuntimeException.
+     *
      * @param   \Throwable  $e  The failure
      *
      * @return  void

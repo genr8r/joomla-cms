@@ -1053,6 +1053,8 @@ final class Database extends CMSPlugin implements SubscriberInterface
     }
 
     /**
+     * Escape a value for HTML output, attributes included.
+     *
      * @param   mixed  $value  A value to print in HTML
      *
      * @return  string

@@ -31,9 +31,10 @@ class IgnoreListTest extends UnitTestCase
             ['kind' => 'prefix', 'name' => 'kiufs_'],
         ]);
 
-        $this->assertTrue($list->isTableIgnored('HC_A'));
-        $this->assertTrue($list->isTableIgnored('kiufs_content'));
-        $this->assertFalse($list->isTableIgnored('hc_c'));
+        $this->assertTrue($list->hasTableEntry('HC_A'));
+        $this->assertFalse($list->hasTableEntry('hc_c'));
+        // A prefix entry is not a table entry: it only applies to its other-prefix group (R3).
+        $this->assertFalse($list->hasTableEntry('kiufs_content'));
         $this->assertTrue($list->isPrefixIgnored('KIUFS_'));
         $this->assertFalse($list->isPrefixIgnored('hc_'));
         $this->assertTrue($list->isColumnIgnored('hc_b', 'Created'));

@@ -22,24 +22,26 @@ namespace Joomla\Plugin\Healthcheck\Database\Ignore;
 final class IgnoreList
 {
     /**
-     * @var    array<string, true>
+     * @var    array<string, true>  Lowercased table names with a table entry
      * @since  __DEPLOY_VERSION__
      */
     private array $tables = [];
 
     /**
-     * @var    array<string, true>
+     * @var    array<string, true>  Lowercased table.column names with a column entry
      * @since  __DEPLOY_VERSION__
      */
     private array $columns = [];
 
     /**
-     * @var    array<string, true>
+     * @var    array<string, true>  Lowercased prefixes with an Ignore all entry
      * @since  __DEPLOY_VERSION__
      */
     private array $prefixes = [];
 
     /**
+     * Constructor. Entries with an unknown kind or an empty name are left out.
+     *
      * @param   array<array{kind:string, name:string}>  $entries  Ignore entries
      *
      * @since   __DEPLOY_VERSION__
@@ -68,30 +70,8 @@ final class IgnoreList
     }
 
     /**
-     * @param   string  $table  Table name
+     * Whether the table has an Ignore entry of its own.
      *
-     * @return  boolean  True for a table entry, or when a prefix entry starts the name
-     *
-     * @since   __DEPLOY_VERSION__
-     */
-    public function isTableIgnored(string $table): bool
-    {
-        $table = strtolower($table);
-
-        if (isset($this->tables[$table])) {
-            return true;
-        }
-
-        foreach (array_keys($this->prefixes) as $prefix) {
-            if ($prefix !== '' && str_starts_with($table, (string) $prefix)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /**
      * @param   string  $table  Table name
      *
      * @return  boolean  True only for an explicit table entry (prefix entries are not considered)
@@ -104,6 +84,8 @@ final class IgnoreList
     }
 
     /**
+     * Whether the prefix has an Ignore all entry.
+     *
      * @param   string  $prefix  Table prefix
      *
      * @return  boolean
@@ -116,6 +98,8 @@ final class IgnoreList
     }
 
     /**
+     * Whether the column has an Ignore entry (stored as table.column).
+     *
      * @param   string  $table   Table name
      * @param   string  $column  Column name
      *

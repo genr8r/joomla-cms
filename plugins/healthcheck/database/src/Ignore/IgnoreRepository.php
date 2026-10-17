@@ -52,6 +52,8 @@ final class IgnoreRepository
     private const NAME_PATTERN = '/^[^\x00-\x1F\x7F]{1,' . self::MAX_NAME . '}$/uD';
 
     /**
+     * Constructor
+     *
      * @param   DatabaseInterface  $db  The Joomla database
      *
      * @since   __DEPLOY_VERSION__

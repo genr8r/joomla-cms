@@ -25,6 +25,8 @@ use PHPUnit\Framework\Attributes\TestDox;
 class CoreTablesTest extends UnitTestCase
 {
     /**
+     * The installation SQL folders to compare the shipped list against.
+     *
      * @return  array
      *
      * @since   __DEPLOY_VERSION__
@@ -74,6 +76,8 @@ class CoreTablesTest extends UnitTestCase
     }
 
     /**
+     * A core table name matches whatever its case.
+     *
      * @return  void
      *
      * @since   __DEPLOY_VERSION__

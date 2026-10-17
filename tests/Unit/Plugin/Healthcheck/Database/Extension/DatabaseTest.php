@@ -99,6 +99,8 @@ class DatabaseTest extends UnitTestCase
     }
 
     /**
+     * Catalog rows for the names.
+     *
      * @param   string[]  $names  Table names
      *
      * @return  array

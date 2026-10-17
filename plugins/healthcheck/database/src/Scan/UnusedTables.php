@@ -24,6 +24,8 @@ use Joomla\Plugin\Healthcheck\Database\Ignore\IgnoreList;
 final class UnusedTables
 {
     /**
+     * The tables nothing accounts for, grouped by prefix, the site prefix group first.
+     *
      * @param   array<array{name:string, rows:?int, bytes:?int, updated:?string}>  $tables      Catalog tables
      * @param   string[]                                                           $accounted   Lowercased `#__` names
      * @param   string                                                             $sitePrefix  The site's table prefix
@@ -87,6 +89,8 @@ final class UnusedTables
     }
 
     /**
+     * Number of listed tables that are not ignored.
+     *
      * @param   array  $groups  The result of groups()
      *
      * @return  integer  Tables listed that are not ignored
@@ -99,6 +103,8 @@ final class UnusedTables
     }
 
     /**
+     * Number of listed tables that are ignored.
+     *
      * @param   array  $groups  The result of groups()
      *
      * @return  integer  Tables listed that are ignored
@@ -111,6 +117,8 @@ final class UnusedTables
     }
 
     /**
+     * Count the tables whose ignored flag matches.
+     *
      * @param   array    $groups   The groups
      * @param   boolean  $ignored  Which flag to count
      *

@@ -242,6 +242,8 @@ final class ZeroDateScanner
     }
 
     /**
+     * Number of zero-date columns that are not ignored.
+     *
      * @param   array       $state    The state
      * @param   IgnoreList  $ignored  Ignore entries
      *
@@ -255,6 +257,8 @@ final class ZeroDateScanner
     }
 
     /**
+     * Number of zero-date columns that are ignored.
+     *
      * @param   array       $state    The state
      * @param   IgnoreList  $ignored  Ignore entries
      *
@@ -268,6 +272,8 @@ final class ZeroDateScanner
     }
 
     /**
+     * How far the current pass is: tables checked (cursor) and tables in the pass.
+     *
      * @param   array  $state  The state
      *
      * @return  array{checked:int, total:int}

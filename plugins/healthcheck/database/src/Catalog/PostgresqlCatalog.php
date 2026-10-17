@@ -24,6 +24,8 @@ use Joomla\Database\DatabaseInterface;
 final class PostgresqlCatalog implements Catalog
 {
     /**
+     * Constructor
+     *
      * @param   DatabaseInterface  $db  The database.
      *
      * @since   __DEPLOY_VERSION__

@@ -26,6 +26,8 @@ use Joomla\CMS\Log\Log;
 final class ResultStore
 {
     /**
+     * Cache group of the stored results.
+     *
      * @var    string
      * @since  __DEPLOY_VERSION__
      */
@@ -40,6 +42,8 @@ final class ResultStore
     public const CACHE_LIFETIME = 10080;
 
     /**
+     * Constructor
+     *
      * @param   CacheControllerFactoryInterface  $factory  Cache controller factory
      *
      * @since   __DEPLOY_VERSION__
@@ -136,6 +140,8 @@ final class ResultStore
     }
 
     /**
+     * The output cache controller, with caching forced on.
+     *
      * @return  OutputController
      *
      * @since   __DEPLOY_VERSION__
